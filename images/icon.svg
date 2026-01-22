@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#6366f1"/>
+      <stop offset="100%" style="stop-color:#8b5cf6"/>
+    </linearGradient>
+    <linearGradient id="barGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#34d399"/>
+      <stop offset="100%" style="stop-color:#10b981"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="64" cy="64" r="60" fill="url(#bgGrad)"/>
+  
+  <!-- Cursor arrow -->
+  <path d="M40 30 L40 75 L52 63 L68 85 L78 78 L62 56 L78 56 Z" 
+        fill="white" 
+        opacity="0.95"/>
+  
+  <!-- Usage bar background -->
+  <rect x="30" y="90" width="68" height="12" rx="6" fill="white" opacity="0.3"/>
+  
+  <!-- Usage bar fill -->
+  <rect x="30" y="90" width="48" height="12" rx="6" fill="url(#barGrad)"/>
+  
+  <!-- Percentage dots -->
+  <circle cx="45" cy="96" r="2" fill="white" opacity="0.6"/>
+  <circle cx="64" cy="96" r="2" fill="white" opacity="0.6"/>
+  <circle cx="83" cy="96" r="2" fill="white" opacity="0.3"/>
+</svg>
