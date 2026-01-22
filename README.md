@@ -117,14 +117,15 @@ Configure the extension in VS Code settings (`File > Preferences > Settings`):
 
 ## Status Bar Indicators
 
-The status bar icon changes based on your usage level:
+The status bar icon changes based on your usage level (friendly, non-intrusive design):
 
 | Icon | Usage Level | Description |
 |------|-------------|-------------|
-| $(pulse) | < 50% | Normal usage |
-| $(dashboard) | 50-74% | Moderate usage |
-| $(warning) | 75-89% | High usage (yellow background) |
-| $(flame) | ≥ 90% | Critical usage (red background) |
+| $(check) | < 50% | Everything is fine |
+| $(graph-line) | 50-74% | Usage trending up |
+| $(zap) | 75-89% | Getting busy |
+| $(rocket) | ≥ 90% | Fast consumption |
+| $(credit-card) | 100% | Exhausted / On-Demand mode |
 
 ## Billing Plans Reference
 
@@ -236,6 +237,13 @@ cursor-usage/
 - [ ] Export usage data to CSV/JSON
 
 ## Changelog
+
+### 0.1.2
+
+- **Improved**: Friendlier status bar icons without pressure
+  - Replaced warning/flame icons with check/graph/zap/rocket
+  - Removed colored backgrounds for normal usage levels
+  - Only highlight when requests are completely exhausted
 
 ### 0.1.1
 

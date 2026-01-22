@@ -112,6 +112,7 @@ export class StatusBarManager {
 
   /**
    * Get appropriate icon based on usage level
+   * Using friendly icons without pressure
    */
   private getUsageIcon(data: UsageData): string {
     // On-Demand mode
@@ -124,18 +125,19 @@ export class StatusBarManager {
     if (percentage >= 100) {
       return '$(credit-card)';
     } else if (percentage >= 90) {
-      return '$(flame)';
+      return '$(rocket)';      // Rocket: fast consumption, but exciting not scary
     } else if (percentage >= 75) {
-      return '$(warning)';
+      return '$(zap)';         // Zap: energy/speed, neutral feeling
     } else if (percentage >= 50) {
-      return '$(dashboard)';
+      return '$(graph-line)';  // Graph: showing usage trend
     } else {
-      return '$(pulse)';
+      return '$(check)';       // Check: everything is fine
     }
   }
 
   /**
    * Get background color based on usage level
+   * Only highlight when exhausted, otherwise keep clean
    */
   private getBackgroundColor(data: UsageData): vscode.ThemeColor | undefined {
     // On-Demand mode - use prominent color
@@ -145,14 +147,12 @@ export class StatusBarManager {
 
     const percentage = this.calculatePercentage(data.premiumRequestsUsed, data.premiumRequestsLimit);
     
+    // Only show background color when completely exhausted
     if (percentage >= 100) {
       return new vscode.ThemeColor('statusBarItem.prominentBackground');
-    } else if (percentage >= 90) {
-      return new vscode.ThemeColor('statusBarItem.errorBackground');
-    } else if (percentage >= 75) {
-      return new vscode.ThemeColor('statusBarItem.warningBackground');
     }
     
+    // No background color for normal usage - cleaner look
     return undefined;
   }
 
