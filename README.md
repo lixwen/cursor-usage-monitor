@@ -28,7 +28,7 @@ A VS Code extension that displays real-time Cursor AI usage statistics in the st
 
 ### From VSIX File
 
-1. Download the `.vsix` file from [Releases](https://github.com/your-username/cursor-usage/releases)
+1. Download the `.vsix` file from [Releases](https://github.com/lixwen/cursor-usage-monitor/releases)
 2. Open VS Code
 3. Press `Ctrl+Shift+P` / `Cmd+Shift+P`
 4. Type "Install from VSIX"
@@ -38,8 +38,8 @@ A VS Code extension that displays real-time Cursor AI usage statistics in the st
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/cursor-usage.git
-cd cursor-usage
+git clone https://github.com/lixwen/cursor-usage-monitor.git
+cd cursor-usage-monitor
 
 # Install dependencies
 npm install
