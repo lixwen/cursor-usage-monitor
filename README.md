@@ -61,13 +61,12 @@ npm run package
 
 ### Automatic Token Detection
 
-The extension automatically detects your Cursor authentication token from Cursor's local SQLite database. No manual configuration is needed in most cases.
+The extension automatically detects your Cursor authentication token from Cursor's local SQLite database. No manual configuration is needed - it works out of the box on all platforms.
 
-**Requirements:**
-- `sqlite3` command-line tool must be installed
-  - Linux: `sudo apt install sqlite3`
-  - macOS: Pre-installed
-  - Windows: Download from [SQLite website](https://sqlite.org/download.html)
+**How it works:**
+- Uses sql.js (pure JavaScript SQLite implementation)
+- No external dependencies required
+- Falls back to `sqlite3` command if available
 
 ### Manual Token Setup (if auto-detection fails)
 
@@ -237,6 +236,13 @@ cursor-usage/
 - [ ] Export usage data to CSV/JSON
 
 ## Changelog
+
+### 0.1.3
+
+- **Improved**: No longer requires `sqlite3` to be installed
+  - Uses sql.js (pure JavaScript SQLite) for token detection
+  - Falls back to sqlite3 command if sql.js fails
+  - Works out of the box on all platforms
 
 ### 0.1.2
 

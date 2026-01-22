@@ -7,6 +7,10 @@ import { URL } from 'url';
 import { execSync } from 'child_process';
 import { UsageData, BillingModel, CursorUsageResponse, BILLING_LIMITS, ApiResponse, TeamsResponse, TeamSpendResponse, TeamInfo } from './types';
 
+// Use asm.js version of sql.js (pure JavaScript, no WASM needed)
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const initSqlJs = require('sql.js/dist/sql-asm.js');
+
 // Import log function from extension (will be set after activation)
 let logFn: ((message: string) => void) | null = null;
 
@@ -201,9 +205,62 @@ export class CursorApiService {
       return null;
     }
 
-    // Use sqlite3 command line tool
+    // Try sql.js first (pure JavaScript, no external dependencies)
+    const tokenFromSqlJs = await this.readTokenUsingSqlJs(dbPath);
+    if (tokenFromSqlJs) {
+      return tokenFromSqlJs;
+    }
+
+    // Fallback to sqlite3 command line
+    const tokenFromCommand = this.readTokenUsingCommand(dbPath);
+    if (tokenFromCommand) {
+      return tokenFromCommand;
+    }
+
+    log('Failed to read token using both methods');
+    return null;
+  }
+
+  /**
+   * Read token using sql.js (pure JavaScript SQLite - asm.js version)
+   */
+  private async readTokenUsingSqlJs(dbPath: string): Promise<string | null> {
     try {
-      log('Reading token using sqlite3 command...');
+      log('Reading token using sql.js (asm.js)...');
+      
+      // Initialize sql.js (asm.js version, no WASM needed)
+      const SQL = await initSqlJs();
+      
+      // Read database file into buffer
+      const fileBuffer = fs.readFileSync(dbPath);
+      const db = new SQL.Database(fileBuffer);
+      
+      try {
+        // Query for token
+        const result = db.exec("SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken'");
+        
+        if (result.length > 0 && result[0].values.length > 0) {
+          const token = result[0].values[0][0] as string;
+          log(`Found token via sql.js (length=${token.length})`);
+          return token;
+        } else {
+          log('No token found in SQLite via sql.js');
+        }
+      } finally {
+        db.close();
+      }
+    } catch (error) {
+      log(`sql.js error: ${error}`);
+    }
+    return null;
+  }
+
+  /**
+   * Read token using sqlite3 command line (fallback)
+   */
+  private readTokenUsingCommand(dbPath: string): string | null {
+    try {
+      log('Fallback: Reading token using sqlite3 command...');
       const command = `sqlite3 "${dbPath}" "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken';"`;
       const result = execSync(command, { 
         encoding: 'utf-8',
@@ -212,16 +269,14 @@ export class CursorApiService {
       }).trim();
 
       if (result) {
-        log(`Found token via sqlite3 (length=${result.length})`);
+        log(`Found token via sqlite3 command (length=${result.length})`);
         return result;
       } else {
-        log('No token found in SQLite');
+        log('No token found via sqlite3 command');
       }
     } catch (error) {
-      log(`sqlite3 command error: ${error}`);
-      log('Please ensure sqlite3 is installed: sudo apt install sqlite3');
+      log(`sqlite3 command not available: ${error}`);
     }
-
     return null;
   }
 

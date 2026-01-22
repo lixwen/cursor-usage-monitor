@@ -2,11 +2,13 @@
  * 测试自动获取 Cursor Token 的脚本
  */
 
-const { execSync } = require('child_process');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
 const https = require('https');
+
+// Use asm.js version (pure JavaScript, no WASM)
+const initSqlJs = require('./node_modules/sql.js/dist/sql-asm.js');
 
 // 获取数据库路径
 function getCursorDbPath() {
@@ -22,8 +24,8 @@ function getCursorDbPath() {
   }
 }
 
-// 从 SQLite 读取 token (使用 sqlite3 命令行)
-function readTokenFromSqlite() {
+// 从 SQLite 读取 token (使用 sql.js asm.js 版本)
+async function readTokenFromSqlite() {
   const dbPath = getCursorDbPath();
   
   console.log('📁 数据库路径:', dbPath);
@@ -36,12 +38,22 @@ function readTokenFromSqlite() {
   console.log('✅ 数据库文件存在');
 
   try {
-    const command = `sqlite3 "${dbPath}" "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken';"`;
-    const result = execSync(command, { encoding: 'utf-8', timeout: 5000 }).trim();
+    console.log('📦 加载 sql.js (asm.js 版本)...');
+    const SQL = await initSqlJs();
+    console.log('✅ sql.js 加载成功');
     
-    if (result) {
+    const fileBuffer = fs.readFileSync(dbPath);
+    console.log(`📊 数据库大小: ${(fileBuffer.length / 1024 / 1024).toFixed(2)} MB`);
+    
+    const db = new SQL.Database(fileBuffer);
+    console.log('✅ 数据库打开成功');
+    
+    const result = db.exec("SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken'");
+    db.close();
+    
+    if (result.length > 0 && result[0].values.length > 0) {
       console.log('✅ 找到 accessToken');
-      return result;
+      return result[0].values[0][0];
     } else {
       console.error('❌ 未找到 accessToken');
       return null;
@@ -133,7 +145,7 @@ async function main() {
 
   // 步骤 1: 读取 token
   console.log('【步骤 1】从 SQLite 数据库读取 Token\n');
-  const token = readTokenFromSqlite();
+  const token = await readTokenFromSqlite();
   
   if (!token) {
     console.log('\n❌ 测试失败：无法获取 token');
