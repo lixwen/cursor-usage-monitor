@@ -34,6 +34,7 @@ export interface ExtensionConfig {
   showInStatusBar: boolean;
   displayMode: DisplayMode;
   billingModel: BillingModel;
+  autoDetectToken: boolean;
 }
 
 export interface ApiResponse<T> {

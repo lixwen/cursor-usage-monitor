@@ -13,6 +13,7 @@ A VS Code extension that displays real-time Cursor AI usage statistics in the st
 
 ## Features
 
+- **Auto Token Detection**: Automatically reads your Cursor authentication token from local SQLite database
 - **Real-time Status Bar Display**: See your Cursor usage at a glance in the VS Code status bar
 - **Multiple Display Modes**: Choose between requests count, percentage, or both
 - **Team Account Support**: Currently optimized for Team accounts with request-based billing
@@ -20,6 +21,7 @@ A VS Code extension that displays real-time Cursor AI usage statistics in the st
 - **Detailed Usage Panel**: Click to view comprehensive usage statistics
 - **Auto-refresh**: Configurable automatic refresh interval
 - **Secure Token Storage**: Your API credentials are stored securely using VS Code's secret storage
+- **Debug Logging**: Output channel for troubleshooting token detection issues
 
 ## Installation
 
@@ -57,20 +59,28 @@ npm run package
 
 ## Configuration
 
-### Setting Up Your Session Token
+### Automatic Token Detection
+
+The extension automatically detects your Cursor authentication token from Cursor's local SQLite database. No manual configuration is needed in most cases.
+
+**Requirements:**
+- `sqlite3` command-line tool must be installed
+  - Linux: `sudo apt install sqlite3`
+  - macOS: Pre-installed
+  - Windows: Download from [SQLite website](https://sqlite.org/download.html)
+
+### Manual Token Setup (if auto-detection fails)
 
 1. Open Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`)
 2. Type "Cursor Usage: Set Session Token"
 3. Follow the instructions to get your token from browser cookies
 
-**How to get your token:**
+**How to get your token manually:**
 1. Open https://cursor.com/settings in your browser
 2. Press F12 to open Developer Tools
 3. Go to **Application** → **Cookies** → `cursor.com`
 4. Find `WorkosCursorSessionToken` and copy its value
 5. Paste the token when prompted
-
-> **Note**: The extension will attempt to auto-detect your Cursor credentials from the local Cursor installation. If auto-detection fails, you'll need to manually set your session token.
 
 ### Extension Settings
 
@@ -82,6 +92,7 @@ Configure the extension in VS Code settings (`File > Preferences > Settings`):
 | `cursorUsage.showInStatusBar` | Show usage information in status bar | `true` |
 | `cursorUsage.displayMode` | Display mode: `requests`, `percentage`, or `both` | `both` |
 | `cursorUsage.billingModel` | Your billing plan: `free`, `pro`, `business`, or `usage-based` | `pro` |
+| `cursorUsage.autoDetectToken` | Automatically detect token from Cursor's local database | `true` |
 
 ### Example Settings
 
@@ -90,7 +101,8 @@ Configure the extension in VS Code settings (`File > Preferences > Settings`):
   "cursorUsage.refreshInterval": 300,
   "cursorUsage.showInStatusBar": true,
   "cursorUsage.displayMode": "both",
-  "cursorUsage.billingModel": "pro"
+  "cursorUsage.billingModel": "pro",
+  "cursorUsage.autoDetectToken": true
 }
 ```
 
@@ -101,6 +113,7 @@ Configure the extension in VS Code settings (`File > Preferences > Settings`):
 | `Cursor Usage: Refresh Usage Data` | Manually refresh usage statistics |
 | `Cursor Usage: Show Usage Details` | Open detailed usage panel |
 | `Cursor Usage: Set Session Token` | Configure your Cursor session token |
+| `Cursor Usage: Clear Saved Token` | Clear stored token (useful for debugging) |
 
 ## Status Bar Indicators
 
@@ -132,10 +145,19 @@ The status bar icon changes based on your usage level:
 
 ### "Not authenticated" Error
 
-1. Ensure you're logged in to cursor.com in your browser
-2. Try setting the session token manually via Command Palette
-3. Make sure to copy the complete token value (including `user_XXXXX::` prefix)
-4. Restart VS Code after setting the token
+1. Ensure you're logged in to Cursor (the application, not the browser)
+2. Check if `sqlite3` is installed: run `sqlite3 --version` in terminal
+3. Check the Output panel (`Ctrl+Shift+U` → select "Cursor Usage Monitor") for detailed logs
+4. Try setting the session token manually via Command Palette
+5. Make sure to copy the complete token value (including `user_XXXXX::` prefix)
+6. Restart VS Code after setting the token
+
+### Auto-detection Not Working
+
+1. Ensure Cursor is installed and you have logged in at least once
+2. Verify `sqlite3` is installed on your system
+3. Check the Output panel for error messages
+4. Try disabling auto-detection (`cursorUsage.autoDetectToken: false`) and set token manually
 
 ### Data Not Updating
 
@@ -214,6 +236,14 @@ cursor-usage/
 - [ ] Export usage data to CSV/JSON
 
 ## Changelog
+
+### 0.1.1
+
+- **New**: Automatic token detection from Cursor's local SQLite database
+- **New**: `autoDetectToken` configuration option (default: enabled)
+- **New**: `Clear Saved Token` command for debugging
+- **New**: Output channel logging for troubleshooting
+- **Improved**: Error handling and logging throughout the extension
 
 ### 0.1.0
 

@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { CursorApiService } from './cursorApi';
+import { CursorApiService, setLogFunction } from './cursorApi';
 import { StatusBarManager } from './statusBar';
 import { ExtensionConfig, UsageData, BillingModel, DisplayMode } from './types';
 
@@ -7,18 +7,40 @@ let statusBarManager: StatusBarManager | undefined;
 let cursorApi: CursorApiService | undefined;
 let refreshTimer: NodeJS.Timeout | undefined;
 let cachedUsageData: UsageData | undefined;
+let outputChannel: vscode.OutputChannel | undefined;
 
 /**
  * Extension activation
  */
+// Log function for debugging
+export function log(message: string) {
+  const timestamp = new Date().toLocaleTimeString();
+  outputChannel?.appendLine(`[${timestamp}] ${message}`);
+}
+
 export function activate(context: vscode.ExtensionContext) {
-  console.log('Cursor Usage Monitor is now active');
+  try {
+    // Create output channel for logging
+    outputChannel = vscode.window.createOutputChannel('Cursor Usage Monitor');
+    context.subscriptions.push(outputChannel);
+    
+    // Share log function with cursorApi module
+    setLogFunction(log);
+    
+    log('Extension activated');
+    log(`Extension path: ${context.extensionPath}`);
 
-  // Initialize components
-  statusBarManager = new StatusBarManager();
-  cursorApi = CursorApiService.getInstance(context);
+    // Initialize components
+    statusBarManager = new StatusBarManager();
+    cursorApi = CursorApiService.getInstance(context);
+  } catch (error) {
+    console.error('Cursor Usage Monitor activation error:', error);
+    vscode.window.showErrorMessage(`Cursor Usage Monitor failed to activate: ${error}`);
+    return;
+  }
 
-  // Register commands
+  try {
+    // Register commands
   const refreshCommand = vscode.commands.registerCommand('cursorUsage.refresh', () => {
     refreshUsageData();
   });
@@ -31,10 +53,16 @@ export function activate(context: vscode.ExtensionContext) {
     promptForToken();
   });
 
+  const clearTokenCommand = vscode.commands.registerCommand('cursorUsage.clearToken', async () => {
+    log('Clear token command triggered');
+    await clearToken();
+  });
+
   context.subscriptions.push(
     refreshCommand,
     showDetailsCommand,
     setTokenCommand,
+    clearTokenCommand,
     statusBarManager
   );
 
@@ -49,6 +77,10 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Initialize and start
   initialize();
+  } catch (error) {
+    log(`Extension setup error: ${error}`);
+    console.error('Cursor Usage Monitor setup error:', error);
+  }
 }
 
 /**
@@ -73,8 +105,8 @@ async function initialize() {
   statusBarManager.show();
   statusBarManager.setLoading();
 
-  // Initialize API
-  const initialized = await cursorApi.initialize();
+  // Initialize API (pass autoDetectToken config)
+  const initialized = await cursorApi.initialize(config.autoDetectToken);
   
   if (!initialized) {
     statusBarManager.setNotAuthenticated();
@@ -97,7 +129,8 @@ function getConfiguration(): ExtensionConfig {
     refreshInterval: config.get<number>('refreshInterval', 60),
     showInStatusBar: config.get<boolean>('showInStatusBar', true),
     displayMode: config.get<DisplayMode>('displayMode', 'both'),
-    billingModel: config.get<BillingModel>('billingModel', 'pro')
+    billingModel: config.get<BillingModel>('billingModel', 'pro'),
+    autoDetectToken: config.get<boolean>('autoDetectToken', true)
   };
 }
 
@@ -147,20 +180,32 @@ async function refreshUsageData() {
     return;
   }
 
-  if (!cursorApi.isAuthenticated()) {
-    statusBarManager.setNotAuthenticated();
-    return;
-  }
-
   const config = getConfiguration();
+  log(`Refresh called - isAuthenticated: ${cursorApi.isAuthenticated()}, autoDetectToken: ${config.autoDetectToken}`);
+
+  // If not authenticated, try to re-initialize (auto-detect token)
+  if (!cursorApi.isAuthenticated()) {
+    log('Not authenticated, trying to initialize...');
+    statusBarManager.setLoading();
+    const initialized = await cursorApi.initialize(config.autoDetectToken);
+    if (!initialized) {
+      log('Initialize failed, showing not authenticated');
+      statusBarManager.setNotAuthenticated();
+      return;
+    }
+    // Start refresh timer after successful re-initialization
+    startRefreshTimer(config.refreshInterval);
+  }
   
   const response = await cursorApi.fetchUsageData(config.billingModel);
 
   if (response.success && response.data) {
     cachedUsageData = response.data;
     statusBarManager.updateUsage(response.data);
+    log(`Usage data updated - premium: ${response.data.premiumRequestsUsed}/${response.data.premiumRequestsLimit}`);
   } else {
     statusBarManager.setError(response.error || 'Unknown error');
+    log(`API error: ${response.error}`);
   }
 }
 
@@ -194,6 +239,47 @@ async function promptForToken() {
       vscode.window.showErrorMessage('Invalid token format. Token should contain user ID (e.g., user_XXXXX::...)');
     }
   }
+}
+
+/**
+ * Clear saved token
+ */
+async function clearToken() {
+  log('clearToken command called');
+  
+  if (!cursorApi || !statusBarManager) {
+    log('ERROR: cursorApi or statusBarManager is undefined');
+    return;
+  }
+
+  log('Clearing token (no confirmation for debug)...');
+  
+  // Stop the refresh timer
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = undefined;
+    log('Refresh timer stopped');
+  } else {
+    log('No refresh timer to stop');
+  }
+  
+  try {
+    await cursorApi.clearCredentials();
+    log('clearCredentials() completed');
+  } catch (e) {
+    log(`clearCredentials() error: ${e}`);
+  }
+  
+  cachedUsageData = undefined;
+  statusBarManager.setNotAuthenticated();
+  
+  const config = getConfiguration();
+  log(`Token cleared - autoDetectToken: ${config.autoDetectToken}, isAuthenticated: ${cursorApi.isAuthenticated()}`);
+  
+  const message = config.autoDetectToken 
+    ? 'Token cleared. Use "Cursor Usage: Refresh" to re-detect token.'
+    : 'Token cleared. Auto-detect is OFF. Use "Cursor Usage: Set Session Token" to set token manually.';
+  vscode.window.showInformationMessage(message);
 }
 
 /**

@@ -4,7 +4,23 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { URL } from 'url';
+import { execSync } from 'child_process';
 import { UsageData, BillingModel, CursorUsageResponse, BILLING_LIMITS, ApiResponse, TeamsResponse, TeamSpendResponse, TeamInfo } from './types';
+
+// Import log function from extension (will be set after activation)
+let logFn: ((message: string) => void) | null = null;
+
+export function setLogFunction(fn: (message: string) => void) {
+  logFn = fn;
+}
+
+function log(message: string) {
+  if (logFn) {
+    logFn(`[API] ${message}`);
+  } else {
+    console.log(`[CursorUsage API] ${message}`);
+  }
+}
 
 /**
  * Cursor API Service
@@ -30,45 +46,71 @@ export class CursorApiService {
 
   /**
    * Initialize the API service by loading credentials
+   * @param autoDetect Whether to auto-detect token from Cursor's local database
    */
-  public async initialize(): Promise<boolean> {
+  public async initialize(autoDetect: boolean = true): Promise<boolean> {
+    log(`Initialize called, autoDetect=${autoDetect}`);
+    
     try {
       // Try to load token from secret storage first
       const storedToken = await this.context.secrets.get('cursorSessionToken');
       if (storedToken) {
+        log('Found token in secret storage');
         this.sessionToken = storedToken;
         this.userId = this.extractUserId(storedToken);
         if (this.userId) {
+          log(`Loaded stored token, userId=${this.userId}`);
           return true;
         }
+      } else {
+        log('No token in secret storage');
       }
 
-      // Try to auto-detect from Cursor's config
-      const autoDetectedToken = await this.autoDetectToken();
-      if (autoDetectedToken) {
-        this.sessionToken = autoDetectedToken;
-        this.userId = this.extractUserId(autoDetectedToken);
-        if (this.userId) {
-          await this.context.secrets.store('cursorSessionToken', autoDetectedToken);
-          return true;
+      // Try to auto-detect from Cursor's config (if enabled)
+      if (autoDetect) {
+        log('Attempting auto-detect from SQLite...');
+        const autoDetectedToken = await this.autoDetectToken();
+        if (autoDetectedToken) {
+          log(`Auto-detected token (length=${autoDetectedToken.length})`);
+          this.sessionToken = autoDetectedToken;
+          this.userId = this.extractUserId(autoDetectedToken);
+          if (this.userId) {
+            log(`Extracted userId=${this.userId}`);
+            await this.context.secrets.store('cursorSessionToken', autoDetectedToken);
+            return true;
+          } else {
+            log('Failed to extract userId from token');
+          }
+        } else {
+          log('Auto-detect failed, no token found in SQLite');
         }
+      } else {
+        log('Auto-detect disabled, skipping');
       }
 
+      log('Initialize failed, no valid token');
       return false;
     } catch (error) {
-      console.error('Failed to initialize Cursor API:', error);
+      log(`Initialize error: ${error}`);
       return false;
     }
   }
 
   /**
    * Extract user ID from session token
-   * Token format: user_XXXXX::JWT_TOKEN or URL encoded version
+   * Token format: 
+   * - user_XXXXX::JWT_TOKEN (WorkosCursorSessionToken cookie format)
+   * - Pure JWT (from SQLite database)
    */
   private extractUserId(token: string): string | null {
     try {
       // Handle URL encoded token
-      const decodedToken = decodeURIComponent(token);
+      let decodedToken: string;
+      try {
+        decodedToken = decodeURIComponent(token);
+      } catch {
+        decodedToken = token;
+      }
       
       // Extract userId from format: user_XXXXX::JWT
       if (decodedToken.includes('::')) {
@@ -78,7 +120,13 @@ export class CursorApiService {
       // Try to parse JWT and extract user ID
       const parts = decodedToken.split('.');
       if (parts.length === 3) {
-        const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
+        // Decode base64url to base64
+        let base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        // Add padding if needed
+        while (base64.length % 4) {
+          base64 += '=';
+        }
+        const payload = JSON.parse(Buffer.from(base64, 'base64').toString());
         if (payload.sub) {
           // Format: auth0|user_XXXXX
           const match = payload.sub.match(/user_[A-Za-z0-9]+/);
@@ -99,6 +147,13 @@ export class CursorApiService {
    * Attempt to auto-detect Cursor session token from local config
    */
   private async autoDetectToken(): Promise<string | null> {
+    // First, try to read from SQLite database (newer Cursor versions)
+    const sqliteToken = await this.readTokenFromSqlite();
+    if (sqliteToken) {
+      return sqliteToken;
+    }
+
+    // Fallback: try JSON config files (older Cursor versions)
     const possiblePaths = this.getCursorConfigPaths();
     
     for (const configPath of possiblePaths) {
@@ -127,6 +182,67 @@ export class CursorApiService {
     }
 
     return null;
+  }
+
+  /**
+   * Read token from Cursor's SQLite database
+   */
+  private async readTokenFromSqlite(): Promise<string | null> {
+    const dbPath = this.getCursorDbPath();
+    log(`SQLite DB path: ${dbPath}`);
+    
+    if (!dbPath) {
+      log('DB path is null');
+      return null;
+    }
+    
+    if (!fs.existsSync(dbPath)) {
+      log('DB file does not exist');
+      return null;
+    }
+
+    // Use sqlite3 command line tool
+    try {
+      log('Reading token using sqlite3 command...');
+      const command = `sqlite3 "${dbPath}" "SELECT value FROM ItemTable WHERE key = 'cursorAuth/accessToken';"`;
+      const result = execSync(command, { 
+        encoding: 'utf-8',
+        timeout: 5000,
+        stdio: ['pipe', 'pipe', 'pipe']
+      }).trim();
+
+      if (result) {
+        log(`Found token via sqlite3 (length=${result.length})`);
+        return result;
+      } else {
+        log('No token found in SQLite');
+      }
+    } catch (error) {
+      log(`sqlite3 command error: ${error}`);
+      log('Please ensure sqlite3 is installed: sudo apt install sqlite3');
+    }
+
+    return null;
+  }
+
+  /**
+   * Get Cursor SQLite database path based on OS
+   */
+  private getCursorDbPath(): string | null {
+    const homeDir = os.homedir();
+    const platform = os.platform();
+
+    let dbPath: string;
+    if (platform === 'win32') {
+      dbPath = path.join(homeDir, 'AppData', 'Roaming', 'Cursor', 'User', 'globalStorage', 'state.vscdb');
+    } else if (platform === 'darwin') {
+      dbPath = path.join(homeDir, 'Library', 'Application Support', 'Cursor', 'User', 'globalStorage', 'state.vscdb');
+    } else {
+      // Linux
+      dbPath = path.join(homeDir, '.config', 'Cursor', 'User', 'globalStorage', 'state.vscdb');
+    }
+
+    return dbPath;
   }
 
   /**
@@ -348,10 +464,18 @@ export class CursorApiService {
       const parsedUrl = new URL(url);
       
       // Prepare cookie value - ensure it's properly formatted
+      // Cookie format should be: user_XXXXX%3A%3AJWT or user_XXXXX::JWT
       let cookieValue = this.sessionToken!;
-      if (!cookieValue.includes('::')) {
-        // Token might already be the full value, use as-is
-        cookieValue = encodeURIComponent(cookieValue);
+      if (!cookieValue.includes('::') && !cookieValue.includes('%3A%3A')) {
+        // Pure JWT token (from SQLite), need to prepend user ID
+        if (this.userId) {
+          cookieValue = `${this.userId}%3A%3A${cookieValue}`;
+        } else {
+          cookieValue = encodeURIComponent(cookieValue);
+        }
+      } else if (cookieValue.includes('::') && !cookieValue.includes('%3A%3A')) {
+        // URL encode the :: separator
+        cookieValue = cookieValue.replace('::', '%3A%3A');
       }
       
       const bodyStr = body ? JSON.stringify(body) : '';
@@ -415,8 +539,10 @@ export class CursorApiService {
    * Clear stored credentials
    */
   public async clearCredentials(): Promise<void> {
+    log('Clearing credentials...');
     this.sessionToken = null;
     this.userId = null;
     await this.context.secrets.delete('cursorSessionToken');
+    log('Credentials cleared');
   }
 }

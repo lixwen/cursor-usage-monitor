@@ -2,12 +2,12 @@
   "name": "cursor-usage",
   "displayName": "Cursor Usage Monitor",
   "description": "Real-time display of Cursor AI usage statistics in the status bar",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "lixen",
   "icon": "images/icon.png",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-username/cursor-usage"
+    "url": "https://github.com/lixwen/cursor-usage-monitor"
   },
   "license": "MIT",
   "engines": {
@@ -40,6 +40,10 @@
       {
         "command": "cursorUsage.setToken",
         "title": "Cursor Usage: Set Session Token"
+      },
+      {
+        "command": "cursorUsage.clearToken",
+        "title": "Cursor Usage: Clear Saved Token"
       }
     ],
     "configuration": {
@@ -76,6 +80,11 @@
           ],
           "default": "pro",
           "description": "Your Cursor billing plan"
+        },
+        "cursorUsage.autoDetectToken": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically detect token from Cursor's local database"
         }
       }
     }
@@ -94,9 +103,9 @@
     "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^6.13.0",
     "@typescript-eslint/parser": "^6.13.0",
+    "@vscode/vsce": "^2.22.0",
     "eslint": "^8.54.0",
-    "typescript": "^5.3.0",
-    "@vscode/vsce": "^2.22.0"
+    "typescript": "^5.3.0"
   },
   "dependencies": {
     "node-fetch": "^2.7.0"
