@@ -7,11 +7,15 @@ A VS Code extension that displays real-time Cursor AI usage statistics in the st
 
 ![Status Bar Preview](./images/preview.png)
 
+## Current Status
+
+> **⚠️ Note**: This extension is currently in early development. Only **Team accounts with request-based billing** have been tested and verified. Other account types (Free, Pro individual, Business, Usage-Based) are not yet fully adapted.
+
 ## Features
 
 - **Real-time Status Bar Display**: See your Cursor usage at a glance in the VS Code status bar
 - **Multiple Display Modes**: Choose between requests count, percentage, or both
-- **Support for All Billing Plans**: Works with Free, Pro, Business, and Usage-Based plans
+- **Team Account Support**: Currently optimized for Team accounts with request-based billing
 - **Visual Indicators**: Color-coded warnings when approaching usage limits
 - **Detailed Usage Panel**: Click to view comprehensive usage statistics
 - **Auto-refresh**: Configurable automatic refresh interval
@@ -186,13 +190,36 @@ cursor-usage/
 └── LICENSE               # MIT License
 ```
 
+## Roadmap
+
+### Account Type Support
+
+| Account Type | Status | Notes |
+|--------------|--------|-------|
+| Team (Request-based) | ✅ Supported | Currently tested and working |
+| Pro (Individual) | 🚧 Planned | API integration pending |
+| Business | 🚧 Planned | API integration pending |
+| Free | 🚧 Planned | API integration pending |
+| Usage-Based (Pay-as-you-go) | 🚧 Planned | API integration pending |
+
+### Planned Features
+
+- [ ] Support for Pro individual accounts
+- [ ] Support for Free tier accounts
+- [ ] Support for Business accounts
+- [ ] Support for Usage-Based billing (cost tracking)
+- [ ] Auto-detect account type from API response
+- [ ] Multi-account switching support
+- [ ] Usage history and trends visualization
+- [ ] Export usage data to CSV/JSON
+
 ## Changelog
 
 ### 0.1.0
 
 - Initial release
 - Real-time status bar display
-- Support for multiple billing models
+- Team account support (request-based billing)
 - Detailed usage panel
 - Configurable refresh interval
 
