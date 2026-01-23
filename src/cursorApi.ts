@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { URL } from 'url';
 import { execSync } from 'child_process';
-import { UsageData, BillingModel, CursorUsageResponse, BILLING_LIMITS, ApiResponse, TeamsResponse, TeamSpendResponse, TeamInfo, UsageEvent, UsageEventsResponse, CombinedUsageData } from './types';
+import { UsageData, BillingModel, CursorUsageResponse, BILLING_LIMITS, ApiResponse, TeamsResponse, TeamSpendResponse, TeamInfo, UsageEvent, UsageEventsResponse, CombinedUsageData, StripeBillingInfo } from './types';
 
 // Use asm.js version of sql.js (pure JavaScript, no WASM needed)
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -34,6 +34,7 @@ export class CursorApiService {
   private static instance: CursorApiService;
   private sessionToken: string | null = null;
   private userId: string | null = null;
+  private detectedBillingModel: BillingModel | null = null;
   private readonly API_BASE_URL = 'https://cursor.com/api';
   private context: vscode.ExtensionContext;
 
@@ -597,8 +598,81 @@ export class CursorApiService {
     log('Clearing credentials...');
     this.sessionToken = null;
     this.userId = null;
+    this.detectedBillingModel = null;
     await this.context.secrets.delete('cursorSessionToken');
     log('Credentials cleared');
+  }
+
+  /**
+   * Fetch billing info from Stripe API
+   */
+  public async fetchBillingInfo(): Promise<ApiResponse<StripeBillingInfo>> {
+    if (!this.sessionToken || !this.userId) {
+      return { success: false, error: 'Not authenticated' };
+    }
+
+    return this.makeApiRequest<StripeBillingInfo>('GET', '/auth/stripe');
+  }
+
+  /**
+   * Auto-detect billing model from API
+   */
+  public async detectBillingModel(): Promise<BillingModel> {
+    // Return cached if available
+    if (this.detectedBillingModel) {
+      return this.detectedBillingModel;
+    }
+
+    try {
+      const response = await this.fetchBillingInfo();
+      
+      if (response.success && response.data) {
+        const info = response.data;
+        let model: BillingModel;
+
+        // Check team membership first
+        if (info.isTeamMember && info.teamMembershipType) {
+          // Team member - check team type
+          if (info.teamMembershipType === 'business' || info.teamMembershipType === 'enterprise') {
+            model = 'business';
+          } else if (info.teamMembershipType === 'usage_based' || info.isOnBillableAuto) {
+            model = 'usage-based';
+          } else {
+            model = 'pro';
+          }
+        } else {
+          // Individual membership
+          const memberType = info.membershipType || info.individualMembershipType;
+          
+          if (memberType === 'free' || memberType === 'free_trial') {
+            model = 'free';
+          } else if (memberType === 'pro' || memberType === 'hobby') {
+            model = 'pro';
+          } else if (memberType === 'business' || memberType === 'enterprise') {
+            model = 'business';
+          } else {
+            // Default to free if unknown
+            model = 'free';
+          }
+        }
+
+        this.detectedBillingModel = model;
+        log(`Auto-detected billing model: ${model} (membershipType=${info.membershipType}, isTeamMember=${info.isTeamMember})`);
+        return model;
+      }
+    } catch (error) {
+      log(`Failed to detect billing model: ${error}`);
+    }
+
+    // Default to free if detection fails
+    return 'free';
+  }
+
+  /**
+   * Get detected or configured billing model
+   */
+  public getDetectedBillingModel(): BillingModel | null {
+    return this.detectedBillingModel;
   }
 
   /**
@@ -638,6 +712,14 @@ export class CursorApiService {
         return {
           success: false,
           error: response.error || 'Failed to fetch usage events'
+        };
+      }
+
+      // Handle empty response (e.g., free plan returns {})
+      if (!response.data.usageEventsDisplay) {
+        return {
+          success: true,
+          data: []
         };
       }
 
@@ -713,7 +795,7 @@ export class CursorApiService {
   /**
    * Fetch combined usage data with automatic billing type detection
    */
-  public async fetchCombinedUsageData(billingModel: BillingModel): Promise<ApiResponse<CombinedUsageData>> {
+  public async fetchCombinedUsageData(configBillingModel: BillingModel): Promise<ApiResponse<CombinedUsageData>> {
     if (!this.sessionToken || !this.userId) {
       return {
         success: false,
@@ -722,21 +804,25 @@ export class CursorApiService {
     }
 
     try {
-      // First, fetch request-based usage data
-      const usageResponse = await this.fetchUsageData(billingModel);
-      
+      // Auto-detect billing model if not already detected
+      const billingModel = await this.detectBillingModel();
+      log(`Using billing model: ${billingModel} (config: ${configBillingModel})`);
+
       // Calculate period dates
       const now = new Date();
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
       const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
 
-      // If usage-based billing or premium exhausted, fetch usage events
+      // First, fetch request-based usage data
+      const usageResponse = await this.fetchUsageData(billingModel);
+      
+      // If usage-based billing or premium exhausted, try to fetch usage events
       if (billingModel === 'usage-based' || 
           (usageResponse.success && usageResponse.data?.isPremiumExhausted)) {
         
         const eventsResponse = await this.fetchUsageEvents('today');
         
-        if (eventsResponse.success && eventsResponse.data) {
+        if (eventsResponse.success && eventsResponse.data && eventsResponse.data.length > 0) {
           const events = eventsResponse.data;
           const todayCost = events.reduce((sum, e) => sum + e.cost, 0);
           const todayTokens = events.reduce((sum, e) => sum + e.tokens, 0);
@@ -755,19 +841,37 @@ export class CursorApiService {
             }
           };
         }
+        
+        // If usage events are empty but we're on usage-based, show $0
+        if (billingModel === 'usage-based') {
+          return {
+            success: true,
+            data: {
+              billingType: 'usage-based',
+              usageBased: {
+                todayCost: 0,
+                todayTokens: 0,
+                recentEvents: []
+              },
+              periodStart: startOfMonth,
+              periodEnd: endOfMonth
+            }
+          };
+        }
       }
 
       // Return request-based data
       if (usageResponse.success && usageResponse.data) {
         const data = usageResponse.data;
+        const limit = data.premiumRequestsLimit || 50; // Default to free plan limit
         return {
           success: true,
           data: {
             billingType: 'request-based',
             requestBased: {
               used: data.premiumRequestsUsed,
-              limit: data.premiumRequestsLimit,
-              percentage: Math.round((data.premiumRequestsUsed / data.premiumRequestsLimit) * 100)
+              limit: limit,
+              percentage: limit > 0 ? Math.round((data.premiumRequestsUsed / limit) * 100) : 0
             },
             periodStart: data.periodStart,
             periodEnd: data.periodEnd

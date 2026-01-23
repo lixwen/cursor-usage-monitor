@@ -27,6 +27,24 @@ export interface UsageData {
 
 export type BillingModel = 'pro' | 'business' | 'free' | 'usage-based';
 
+/**
+ * Stripe billing info from /api/auth/stripe
+ */
+export interface StripeBillingInfo {
+  membershipType: string;
+  paymentId: string;
+  verifiedStudent: boolean;
+  trialEligible: boolean;
+  trialLengthDays: number;
+  isOnStudentPlan: boolean;
+  isOnBillableAuto: boolean;
+  customerBalance: number | null;
+  trialWasCancelled: boolean;
+  isTeamMember: boolean;
+  teamMembershipType: string | null;
+  individualMembershipType: string;
+}
+
 export type DisplayMode = 'requests' | 'percentage' | 'both';
 
 export interface ExtensionConfig {
