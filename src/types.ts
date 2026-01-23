@@ -144,17 +144,25 @@ export interface UsageEvent {
  * Usage events response from /api/dashboard/get-filtered-usage-events
  */
 export interface UsageEventsResponse {
-  usageEventsDisplay: Array<{
+  totalUsageEventsCount?: number;
+  usageEventsDisplay?: Array<{
     timestamp: string;
     model: string;
     kind: string;
-    usageBasedCosts: string | number | object;
+    customSubscriptionName?: string;
+    requestsCosts?: number;
+    usageBasedCosts?: string | number | object;
+    isTokenBasedCall?: boolean;
     tokenUsage?: {
       cacheWriteTokens?: number;
       cacheReadTokens?: number;
       inputTokens?: number;
       outputTokens?: number;
+      totalCents?: number;
     };
+    owningUser?: string;
+    cursorTokenFee?: number;
+    isChargeable?: boolean;
   }>;
 }
 

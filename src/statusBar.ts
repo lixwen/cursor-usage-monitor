@@ -106,11 +106,19 @@ export class StatusBarManager {
       const cost = data.usageBased.todayCost;
       const tokens = data.usageBased.todayTokens;
       
-      if (cost > 0) {
-        text = `$(credit-card) $${cost.toFixed(2)}`;
+      // Format cost - show cents if < $0.01, otherwise show dollars
+      let costStr: string;
+      if (cost === 0) {
+        costStr = '$0.00';
+      } else if (cost < 0.01) {
+        costStr = `${(cost * 100).toFixed(2)}¢`;
+      } else if (cost < 1) {
+        costStr = `$${cost.toFixed(3)}`;
       } else {
-        text = `$(credit-card) $0.00`;
+        costStr = `$${cost.toFixed(2)}`;
       }
+      
+      text = `$(credit-card) ${costStr}`;
       
       tooltip = this.formatUsageBasedTooltip(data);
     } else if (data.requestBased) {

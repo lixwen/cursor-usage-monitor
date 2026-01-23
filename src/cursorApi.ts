@@ -616,6 +616,7 @@ export class CursorApiService {
 
   /**
    * Auto-detect billing model from API
+   * Note: All plans (including free) are now usage-based (token billing)
    */
   public async detectBillingModel(): Promise<BillingModel> {
     // Return cached if available
@@ -635,25 +636,13 @@ export class CursorApiService {
           // Team member - check team type
           if (info.teamMembershipType === 'business' || info.teamMembershipType === 'enterprise') {
             model = 'business';
-          } else if (info.teamMembershipType === 'usage_based' || info.isOnBillableAuto) {
-            model = 'usage-based';
           } else {
-            model = 'pro';
+            model = 'usage-based';
           }
         } else {
-          // Individual membership
-          const memberType = info.membershipType || info.individualMembershipType;
-          
-          if (memberType === 'free' || memberType === 'free_trial') {
-            model = 'free';
-          } else if (memberType === 'pro' || memberType === 'hobby') {
-            model = 'pro';
-          } else if (memberType === 'business' || memberType === 'enterprise') {
-            model = 'business';
-          } else {
-            // Default to free if unknown
-            model = 'free';
-          }
+          // All individual plans are now usage-based (including free)
+          // Just record the membership type for display purposes
+          model = 'usage-based';
         }
 
         this.detectedBillingModel = model;
@@ -664,8 +653,8 @@ export class CursorApiService {
       log(`Failed to detect billing model: ${error}`);
     }
 
-    // Default to free if detection fails
-    return 'free';
+    // Default to usage-based
+    return 'usage-based';
   }
 
   /**
@@ -746,11 +735,34 @@ export class CursorApiService {
 
     return response.usageEventsDisplay.map(event => {
       const eventDate = new Date(parseInt(event.timestamp));
-      const costInfo = this.parseCost(event.usageBasedCosts);
+      
+      // Calculate tokens
       const tokens = (event.tokenUsage?.cacheWriteTokens || 0) +
                      (event.tokenUsage?.cacheReadTokens || 0) +
                      (event.tokenUsage?.inputTokens || 0) +
                      (event.tokenUsage?.outputTokens || 0);
+
+      // Get cost - prefer totalCents from tokenUsage, fallback to usageBasedCosts
+      let costCents = 0;
+      let costDisplay = '$0.00';
+      
+      if (event.tokenUsage?.totalCents !== undefined) {
+        // New format: totalCents in tokenUsage
+        costCents = event.tokenUsage.totalCents;
+        const costDollars = costCents / 100;
+        costDisplay = `$${costDollars.toFixed(4)}`;
+      } else if (event.usageBasedCosts && event.usageBasedCosts !== '-') {
+        // Old format: usageBasedCosts
+        const costInfo = this.parseCost(event.usageBasedCosts);
+        costCents = costInfo.numericValue * 100;
+        costDisplay = costInfo.displayValue;
+      }
+
+      // Determine display kind
+      let displayKind = event.kind || 'Unknown';
+      if (event.customSubscriptionName) {
+        displayKind = event.customSubscriptionName.toUpperCase();
+      }
 
       return {
         timestamp: event.timestamp,
@@ -758,9 +770,9 @@ export class CursorApiService {
         time: eventDate.toLocaleTimeString(),
         model: event.model || 'Unknown',
         tokens,
-        cost: costInfo.numericValue,
-        costDisplay: costInfo.displayValue,
-        kind: event.kind || 'Unknown'
+        cost: costCents / 100, // Store as dollars
+        costDisplay,
+        kind: displayKind
       };
     });
   }
@@ -794,6 +806,7 @@ export class CursorApiService {
 
   /**
    * Fetch combined usage data with automatic billing type detection
+   * Note: All Cursor plans are now usage-based (token billing)
    */
   public async fetchCombinedUsageData(configBillingModel: BillingModel): Promise<ApiResponse<CombinedUsageData>> {
     if (!this.sessionToken || !this.userId) {
@@ -804,7 +817,7 @@ export class CursorApiService {
     }
 
     try {
-      // Auto-detect billing model if not already detected
+      // Auto-detect billing model
       const billingModel = await this.detectBillingModel();
       log(`Using billing model: ${billingModel} (config: ${configBillingModel})`);
 
@@ -813,75 +826,42 @@ export class CursorApiService {
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
       const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
 
-      // First, fetch request-based usage data
-      const usageResponse = await this.fetchUsageData(billingModel);
+      // All plans are now usage-based, fetch usage events
+      const eventsResponse = await this.fetchUsageEvents('today');
       
-      // If usage-based billing or premium exhausted, try to fetch usage events
-      if (billingModel === 'usage-based' || 
-          (usageResponse.success && usageResponse.data?.isPremiumExhausted)) {
-        
-        const eventsResponse = await this.fetchUsageEvents('today');
-        
-        if (eventsResponse.success && eventsResponse.data && eventsResponse.data.length > 0) {
-          const events = eventsResponse.data;
-          const todayCost = events.reduce((sum, e) => sum + e.cost, 0);
-          const todayTokens = events.reduce((sum, e) => sum + e.tokens, 0);
+      if (eventsResponse.success && eventsResponse.data) {
+        const events = eventsResponse.data;
+        const todayCost = events.reduce((sum, e) => sum + e.cost, 0);
+        const todayTokens = events.reduce((sum, e) => sum + e.tokens, 0);
 
-          return {
-            success: true,
-            data: {
-              billingType: 'usage-based',
-              usageBased: {
-                todayCost,
-                todayTokens,
-                recentEvents: events.sort((a, b) => parseInt(b.timestamp) - parseInt(a.timestamp))
-              },
-              periodStart: startOfMonth,
-              periodEnd: endOfMonth
-            }
-          };
-        }
-        
-        // If usage events are empty but we're on usage-based, show $0
-        if (billingModel === 'usage-based') {
-          return {
-            success: true,
-            data: {
-              billingType: 'usage-based',
-              usageBased: {
-                todayCost: 0,
-                todayTokens: 0,
-                recentEvents: []
-              },
-              periodStart: startOfMonth,
-              periodEnd: endOfMonth
-            }
-          };
-        }
-      }
-
-      // Return request-based data
-      if (usageResponse.success && usageResponse.data) {
-        const data = usageResponse.data;
-        const limit = data.premiumRequestsLimit || 50; // Default to free plan limit
         return {
           success: true,
           data: {
-            billingType: 'request-based',
-            requestBased: {
-              used: data.premiumRequestsUsed,
-              limit: limit,
-              percentage: limit > 0 ? Math.round((data.premiumRequestsUsed / limit) * 100) : 0
+            billingType: 'usage-based',
+            usageBased: {
+              todayCost,
+              todayTokens,
+              recentEvents: events.sort((a, b) => parseInt(b.timestamp) - parseInt(a.timestamp))
             },
-            periodStart: data.periodStart,
-            periodEnd: data.periodEnd
+            periodStart: startOfMonth,
+            periodEnd: endOfMonth
           }
         };
       }
 
+      // If fetching events failed, return empty usage
       return {
-        success: false,
-        error: usageResponse.error || 'Failed to fetch usage data'
+        success: true,
+        data: {
+          billingType: 'usage-based',
+          usageBased: {
+            todayCost: 0,
+            todayTokens: 0,
+            recentEvents: []
+          },
+          periodStart: startOfMonth,
+          periodEnd: endOfMonth
+        }
       };
     } catch (error) {
       return {
