@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { CursorApiService, setLogFunction } from './cursorApi';
 import { StatusBarManager } from './statusBar';
-import { ExtensionConfig, UsageData, BillingModel, DisplayMode } from './types';
+import { ExtensionConfig, UsageData, BillingModel, DisplayMode, CombinedUsageData } from './types';
 
 let statusBarManager: StatusBarManager | undefined;
 let cursorApi: CursorApiService | undefined;
@@ -298,24 +298,30 @@ async function clearToken() {
  * Show detailed usage information
  */
 async function showUsageDetails() {
-  if (!cachedUsageData) {
+  // Get cached combined data from status bar manager
+  const combinedData = statusBarManager?.getCachedCombinedData();
+  
+  if (!combinedData) {
     await refreshUsageData();
+    const newData = statusBarManager?.getCachedCombinedData();
+    if (!newData) {
+      const action = await vscode.window.showWarningMessage(
+        'No usage data available. Would you like to set your session token?',
+        'Set Token',
+        'Cancel'
+      );
+
+      if (action === 'Set Token') {
+        promptForToken();
+      }
+      return;
+    }
   }
 
-  if (!cachedUsageData) {
-    const action = await vscode.window.showWarningMessage(
-      'No usage data available. Would you like to set your session token?',
-      'Set Token',
-      'Cancel'
-    );
-
-    if (action === 'Set Token') {
-      promptForToken();
-    }
+  const data = statusBarManager?.getCachedCombinedData();
+  if (!data) {
     return;
   }
-
-  const data = cachedUsageData;
   
   const panel = vscode.window.createWebviewPanel(
     'cursorUsageDetails',
@@ -330,23 +336,122 @@ async function showUsageDetails() {
 }
 
 /**
- * Generate webview HTML content
+ * Generate webview HTML content for combined usage data
  */
-function getWebviewContent(data: UsageData): string {
-  const premiumPct = Math.round((data.premiumRequestsUsed / data.premiumRequestsLimit) * 100);
-  const premiumRemaining = Math.max(0, data.premiumRequestsLimit - data.premiumRequestsUsed);
-  
+function getWebviewContent(data: CombinedUsageData): string {
   const periodStart = data.periodStart.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
   const periodEnd = data.periodEnd.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-  
   const daysLeft = Math.max(0, Math.ceil((data.periodEnd.getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
 
-  const billingModelNames: Record<BillingModel, string> = {
-    'free': 'Free',
-    'pro': 'Pro',
-    'business': 'Business',
-    'usage-based': 'Usage-Based'
-  };
+  // Generate content based on billing type
+  let usageContent = '';
+  
+  if (data.billingType === 'usage-based' && data.usageBased) {
+    const { todayCost, todayTokens, recentEvents } = data.usageBased;
+    
+    // Format cost
+    let costDisplay: string;
+    if (todayCost === 0) {
+      costDisplay = '$0.00';
+    } else if (todayCost < 0.01) {
+      costDisplay = `${(todayCost * 100).toFixed(2)}¢`;
+    } else if (todayCost < 1) {
+      costDisplay = `$${todayCost.toFixed(3)}`;
+    } else {
+      costDisplay = `$${todayCost.toFixed(2)}`;
+    }
+
+    // Generate events table
+    let eventsHtml = '';
+    if (recentEvents.length > 0) {
+      const eventRows = recentEvents.map(event => {
+        const time = new Date(parseInt(event.timestamp)).toLocaleTimeString();
+        return `
+          <tr>
+            <td>${time}</td>
+            <td>${event.model}</td>
+            <td>${event.tokens.toLocaleString()}</td>
+            <td>${event.costDisplay}</td>
+          </tr>
+        `;
+      }).join('');
+
+      eventsHtml = `
+        <div class="card">
+          <h2>📋 Today's Requests (${recentEvents.length})</h2>
+          <table class="events-table">
+            <thead>
+              <tr>
+                <th>Time</th>
+                <th>Model</th>
+                <th>Tokens</th>
+                <th>Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${eventRows}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    usageContent = `
+      <div class="card">
+        <h2>💳 Today's Usage</h2>
+        <div class="stats-grid">
+          <div class="stat-item">
+            <div class="stat-value">${costDisplay}</div>
+            <div class="stat-label">Cost</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value">${todayTokens.toLocaleString()}</div>
+            <div class="stat-label">Tokens</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value">${recentEvents.length}</div>
+            <div class="stat-label">Requests</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value">${daysLeft}</div>
+            <div class="stat-label">Days Left</div>
+          </div>
+        </div>
+      </div>
+      ${eventsHtml}
+    `;
+  } else if (data.requestBased) {
+    const { used, limit, percentage } = data.requestBased;
+    const remaining = Math.max(0, limit - used);
+
+    usageContent = `
+      <div class="card">
+        <h2>Premium Requests</h2>
+        <div class="progress-container">
+          <div class="progress-bar ${percentage >= 90 ? 'high' : percentage >= 75 ? 'medium' : 'low'}" 
+               style="width: ${Math.min(100, percentage)}%"></div>
+        </div>
+        <div class="stats-grid">
+          <div class="stat-item">
+            <div class="stat-value">${used}</div>
+            <div class="stat-label">Used</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value">${remaining}</div>
+            <div class="stat-label">Remaining</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value">${limit}</div>
+            <div class="stat-label">Total Limit</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-value">${percentage}%</div>
+            <div class="stat-label">Usage</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -362,7 +467,7 @@ function getWebviewContent(data: UsageData): string {
       background-color: var(--vscode-editor-background);
     }
     .container {
-      max-width: 600px;
+      max-width: 700px;
       margin: 0 auto;
     }
     h1 {
@@ -437,6 +542,24 @@ function getWebviewContent(data: UsageData): string {
       font-size: 0.8em;
       margin-top: 20px;
     }
+    .events-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 10px;
+      font-size: 0.9em;
+    }
+    .events-table th, .events-table td {
+      padding: 10px;
+      text-align: left;
+      border-bottom: 1px solid var(--vscode-panel-border);
+    }
+    .events-table th {
+      color: var(--vscode-descriptionForeground);
+      font-weight: normal;
+    }
+    .events-table tr:hover {
+      background-color: var(--vscode-list-hoverBackground);
+    }
   </style>
 </head>
 <body>
@@ -444,55 +567,15 @@ function getWebviewContent(data: UsageData): string {
     <h1>📊 Cursor Usage Statistics</h1>
     
     <div class="card">
-      <h2>Billing Plan</h2>
-      <span class="billing-badge">${billingModelNames[data.billingModel]}</span>
+      <h2>Billing</h2>
+      <span class="billing-badge">${data.billingType === 'usage-based' ? '💳 Usage-Based (Token)' : '📊 Request-Based'}</span>
       <p class="period-info">
         📅 ${periodStart} - ${periodEnd}<br>
-        ⏳ ${daysLeft} days remaining in billing period
+        ⏳ ${daysLeft} days remaining
       </p>
     </div>
 
-    <div class="card">
-      <h2>Premium Requests (Fast Model)</h2>
-      <div class="progress-container">
-        <div class="progress-bar ${premiumPct >= 90 ? 'high' : premiumPct >= 75 ? 'medium' : 'low'}" 
-             style="width: ${Math.min(100, premiumPct)}%"></div>
-      </div>
-      <div class="stats-grid">
-        <div class="stat-item">
-          <div class="stat-value">${data.premiumRequestsUsed}</div>
-          <div class="stat-label">Used</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-value">${premiumRemaining}</div>
-          <div class="stat-label">Remaining</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-value">${data.premiumRequestsLimit}</div>
-          <div class="stat-label">Total Limit</div>
-        </div>
-        <div class="stat-item">
-          <div class="stat-value">${premiumPct}%</div>
-          <div class="stat-label">Usage</div>
-        </div>
-      </div>
-    </div>
-
-    ${data.isPremiumExhausted ? `
-    <div class="card" style="border: 2px solid #ff9800;">
-      <h2>⚠️ Premium Requests Exhausted</h2>
-      <p style="color: var(--vscode-descriptionForeground);">You are now using On-Demand billing.</p>
-    </div>
-    ` : ''}
-
-    ${data.usageBasedCostCents !== undefined ? `
-    <div class="card">
-      <h2>💳 On-Demand Usage</h2>
-      ${data.teamName ? `<p style="color: var(--vscode-descriptionForeground);">Team: ${data.teamName}</p>` : ''}
-      <div class="stat-value" style="text-align: center;">$${(data.usageBasedCostCents / 100).toFixed(2)}</div>
-      <div class="stat-label" style="text-align: center;">Current billing period</div>
-    </div>
-    ` : ''}
+    ${usageContent}
 
     <p class="last-updated">Last updated: ${new Date().toLocaleString()}</p>
   </div>
