@@ -104,7 +104,6 @@ export class StatusBarManager {
     if (data.billingType === 'usage-based' && data.usageBased) {
       // Usage-based: show today's cost
       const cost = data.usageBased.todayCost;
-      const tokens = data.usageBased.todayTokens;
       
       // Format cost - show cents if < $0.01, otherwise show dollars
       let costStr: string;
@@ -118,29 +117,28 @@ export class StatusBarManager {
         costStr = `$${cost.toFixed(2)}`;
       }
       
-      text = `$(credit-card) ${costStr}`;
+      text = `Cursor ${costStr}`;
       
       tooltip = this.formatUsageBasedTooltip(data);
     } else if (data.requestBased) {
       // Request-based: show requests used/limit
       const { used, limit, percentage } = data.requestBased;
-      const icon = this.getRequestBasedIcon(percentage);
       
       switch (this.displayMode) {
         case 'requests':
-          text = `${icon} ${used}/${limit}`;
+          text = `Cursor ${used}/${limit}`;
           break;
         case 'percentage':
-          text = `${icon} ${percentage}%`;
+          text = `Cursor ${percentage}%`;
           break;
         case 'both':
         default:
-          text = `${icon} ${used}/${limit} (${percentage}%)`;
+          text = `Cursor ${used}/${limit}`;
       }
       
       tooltip = this.formatRequestBasedTooltip(data);
     } else {
-      text = '$(question) No data';
+      text = 'Cursor';
       tooltip = new vscode.MarkdownString('No usage data available');
     }
 
@@ -175,34 +173,35 @@ export class StatusBarManager {
     const md = new vscode.MarkdownString();
     md.isTrusted = true;
 
-    md.appendMarkdown(`## Cursor Usage (Usage-Based)\n\n`);
-    
     if (data.usageBased) {
       const { todayCost, todayTokens, recentEvents } = data.usageBased;
       
-      md.appendMarkdown(`### Today's Usage\n`);
-      md.appendMarkdown(`**Cost:** $${todayCost.toFixed(2)}\n\n`);
-      md.appendMarkdown(`**Tokens:** ${todayTokens.toLocaleString()}\n\n`);
+      // Format cost
+      let costStr: string;
+      if (todayCost === 0) {
+        costStr = '$0.00';
+      } else if (todayCost < 0.01) {
+        costStr = `${(todayCost * 100).toFixed(2)}¢`;
+      } else {
+        costStr = `$${todayCost.toFixed(3)}`;
+      }
+      
+      md.appendMarkdown(`**Today** ${costStr} · ${todayTokens.toLocaleString()} tokens · ${recentEvents.length} requests\n\n`);
       
       if (recentEvents.length > 0) {
-        md.appendMarkdown(`---\n\n`);
-        md.appendMarkdown(`### Recent Requests (${recentEvents.length})\n\n`);
-        
-        // Show last 5 events
-        const showEvents = recentEvents.slice(0, 5);
+        const showEvents = recentEvents.slice(0, 3);
         for (const event of showEvents) {
-          const costIcon = event.cost > 0.1 ? '🔶' : event.cost > 0 ? '🔹' : '⚪';
-          md.appendMarkdown(`${costIcon} ${event.costDisplay} • ${event.model} • ${event.tokens.toLocaleString()} tokens\n\n`);
-        }
-        
-        if (recentEvents.length > 5) {
-          md.appendMarkdown(`_...and ${recentEvents.length - 5} more_\n\n`);
+          const time = new Date(parseInt(event.timestamp)).toLocaleTimeString('en-US', { 
+            hour: 'numeric', minute: '2-digit', hour12: true 
+          });
+          md.appendMarkdown(`${time} · ${event.model} · ${event.costDisplay}\n\n`);
         }
       }
     }
 
+    const daysLeft = this.calculateDaysLeft(data.periodEnd);
     md.appendMarkdown(`---\n\n`);
-    md.appendMarkdown(`*Click for detailed view • ${new Date().toLocaleTimeString()}*`);
+    md.appendMarkdown(`${daysLeft} days left · Click for details`);
 
     return md;
   }
@@ -213,28 +212,18 @@ export class StatusBarManager {
   private formatRequestBasedTooltip(data: CombinedUsageData): vscode.MarkdownString {
     const md = new vscode.MarkdownString();
     md.isTrusted = true;
-
-    md.appendMarkdown(`## Cursor Usage (Request-Based)\n\n`);
     
     if (data.requestBased) {
       const { used, limit, percentage } = data.requestBased;
-      const progressBar = this.createProgressBar(Math.min(100, percentage));
+      const remaining = Math.max(0, limit - used);
       
-      md.appendMarkdown(`### Premium Requests\n`);
-      md.appendMarkdown(`${progressBar} **${percentage}%**\n\n`);
-      md.appendMarkdown(`**Used:** ${used} / ${limit}\n\n`);
-      md.appendMarkdown(`**Remaining:** ${Math.max(0, limit - used)}\n\n`);
+      md.appendMarkdown(`**${used}** / ${limit} requests used\n\n`);
+      md.appendMarkdown(`${remaining} remaining · ${percentage}%\n\n`);
     }
 
-    md.appendMarkdown(`---\n\n`);
-    md.appendMarkdown(`### Billing Period\n`);
-    md.appendMarkdown(`${this.formatDate(data.periodStart)} - ${this.formatDate(data.periodEnd)}\n\n`);
-    
     const daysLeft = this.calculateDaysLeft(data.periodEnd);
-    md.appendMarkdown(`**${daysLeft}** days remaining\n\n`);
-
     md.appendMarkdown(`---\n\n`);
-    md.appendMarkdown(`*Click for detailed view • ${new Date().toLocaleTimeString()}*`);
+    md.appendMarkdown(`${daysLeft} days left · Click for details`);
 
     return md;
   }

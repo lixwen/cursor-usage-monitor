@@ -337,14 +337,14 @@ async function showUsageDetails() {
 
 /**
  * Generate webview HTML content for combined usage data
+ * Design: Apple-inspired, clean, minimal
  */
 function getWebviewContent(data: CombinedUsageData): string {
-  const periodStart = data.periodStart.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-  const periodEnd = data.periodEnd.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+  const periodStart = data.periodStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const periodEnd = data.periodEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   const daysLeft = Math.max(0, Math.ceil((data.periodEnd.getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
 
-  // Generate content based on billing type
-  let usageContent = '';
+  let mainContent = '';
   
   if (data.billingType === 'usage-based' && data.usageBased) {
     const { todayCost, todayTokens, recentEvents } = data.usageBased;
@@ -361,95 +361,84 @@ function getWebviewContent(data: CombinedUsageData): string {
       costDisplay = `$${todayCost.toFixed(2)}`;
     }
 
-    // Generate events table
+    // Events list
     let eventsHtml = '';
     if (recentEvents.length > 0) {
-      const eventRows = recentEvents.map(event => {
-        const time = new Date(parseInt(event.timestamp)).toLocaleTimeString();
+      const eventItems = recentEvents.map(event => {
+        const time = new Date(parseInt(event.timestamp)).toLocaleTimeString('en-US', { 
+          hour: 'numeric', 
+          minute: '2-digit',
+          hour12: true 
+        });
         return `
-          <tr>
-            <td>${time}</td>
-            <td>${event.model}</td>
-            <td>${event.tokens.toLocaleString()}</td>
-            <td>${event.costDisplay}</td>
-          </tr>
+          <div class="list-item">
+            <div class="list-item-left">
+              <span class="list-title">${event.model}</span>
+              <span class="list-subtitle">${time}</span>
+            </div>
+            <div class="list-item-right">
+              <span class="list-value">${event.costDisplay}</span>
+              <span class="list-detail">${event.tokens.toLocaleString()} tokens</span>
+            </div>
+          </div>
         `;
       }).join('');
 
       eventsHtml = `
-        <div class="card">
-          <h2>📋 Today's Requests (${recentEvents.length})</h2>
-          <table class="events-table">
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Model</th>
-                <th>Tokens</th>
-                <th>Cost</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${eventRows}
-            </tbody>
-          </table>
-        </div>
+        <section class="section">
+          <h2 class="section-title">Activity</h2>
+          <div class="list-group">
+            ${eventItems}
+          </div>
+        </section>
       `;
     }
 
-    usageContent = `
-      <div class="card">
-        <h2>💳 Today's Usage</h2>
-        <div class="stats-grid">
-          <div class="stat-item">
-            <div class="stat-value">${costDisplay}</div>
-            <div class="stat-label">Cost</div>
+    mainContent = `
+      <section class="section">
+        <h2 class="section-title">Today</h2>
+        <div class="hero-stat">
+          <span class="hero-value">${costDisplay}</span>
+          <span class="hero-label">spent</span>
+        </div>
+        <div class="stat-row">
+          <div class="stat-cell">
+            <span class="stat-value">${todayTokens.toLocaleString()}</span>
+            <span class="stat-label">tokens</span>
           </div>
-          <div class="stat-item">
-            <div class="stat-value">${todayTokens.toLocaleString()}</div>
-            <div class="stat-label">Tokens</div>
-          </div>
-          <div class="stat-item">
-            <div class="stat-value">${recentEvents.length}</div>
-            <div class="stat-label">Requests</div>
-          </div>
-          <div class="stat-item">
-            <div class="stat-value">${daysLeft}</div>
-            <div class="stat-label">Days Left</div>
+          <div class="stat-cell">
+            <span class="stat-value">${recentEvents.length}</span>
+            <span class="stat-label">requests</span>
           </div>
         </div>
-      </div>
+      </section>
       ${eventsHtml}
     `;
   } else if (data.requestBased) {
     const { used, limit, percentage } = data.requestBased;
     const remaining = Math.max(0, limit - used);
 
-    usageContent = `
-      <div class="card">
-        <h2>Premium Requests</h2>
-        <div class="progress-container">
-          <div class="progress-bar ${percentage >= 90 ? 'high' : percentage >= 75 ? 'medium' : 'low'}" 
-               style="width: ${Math.min(100, percentage)}%"></div>
+    mainContent = `
+      <section class="section">
+        <h2 class="section-title">Requests</h2>
+        <div class="hero-stat">
+          <span class="hero-value">${used}<span class="hero-total">/${limit}</span></span>
+          <span class="hero-label">used</span>
         </div>
-        <div class="stats-grid">
-          <div class="stat-item">
-            <div class="stat-value">${used}</div>
-            <div class="stat-label">Used</div>
+        <div class="progress-track">
+          <div class="progress-fill" style="width: ${Math.min(100, percentage)}%"></div>
+        </div>
+        <div class="stat-row">
+          <div class="stat-cell">
+            <span class="stat-value">${remaining}</span>
+            <span class="stat-label">remaining</span>
           </div>
-          <div class="stat-item">
-            <div class="stat-value">${remaining}</div>
-            <div class="stat-label">Remaining</div>
-          </div>
-          <div class="stat-item">
-            <div class="stat-value">${limit}</div>
-            <div class="stat-label">Total Limit</div>
-          </div>
-          <div class="stat-item">
-            <div class="stat-value">${percentage}%</div>
-            <div class="stat-label">Usage</div>
+          <div class="stat-cell">
+            <span class="stat-value">${percentage}%</span>
+            <span class="stat-label">used</span>
           </div>
         </div>
-      </div>
+      </section>
     `;
   }
 
@@ -458,126 +447,190 @@ function getWebviewContent(data: CombinedUsageData): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Cursor Usage Details</title>
+  <title>Usage</title>
   <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
     body {
-      font-family: var(--vscode-font-family);
-      padding: 20px;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+      background: var(--vscode-editor-background);
       color: var(--vscode-foreground);
-      background-color: var(--vscode-editor-background);
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
     }
     .container {
-      max-width: 700px;
+      max-width: 480px;
       margin: 0 auto;
+      padding: 32px 24px;
     }
-    h1 {
+    
+    /* Header */
+    .header {
+      margin-bottom: 32px;
+    }
+    .header-title {
+      font-size: 28px;
+      font-weight: 600;
+      letter-spacing: -0.5px;
+      margin-bottom: 8px;
+    }
+    .header-meta {
+      display: flex;
+      gap: 16px;
+      font-size: 13px;
+      color: var(--vscode-descriptionForeground);
+    }
+    .meta-item {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    
+    /* Section */
+    .section {
+      margin-bottom: 32px;
+    }
+    .section-title {
+      font-size: 13px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--vscode-descriptionForeground);
+      margin-bottom: 16px;
+    }
+    
+    /* Hero Stat */
+    .hero-stat {
+      text-align: center;
+      padding: 24px 0;
+    }
+    .hero-value {
+      font-size: 48px;
+      font-weight: 300;
+      letter-spacing: -2px;
       color: var(--vscode-textLink-foreground);
-      border-bottom: 1px solid var(--vscode-panel-border);
-      padding-bottom: 10px;
     }
-    .card {
-      background-color: var(--vscode-editor-inactiveSelectionBackground);
-      border-radius: 8px;
-      padding: 20px;
-      margin-bottom: 20px;
+    .hero-total {
+      font-size: 24px;
+      color: var(--vscode-descriptionForeground);
     }
-    .card h2 {
-      margin-top: 0;
-      font-size: 1.1em;
-      color: var(--vscode-textPreformat-foreground);
+    .hero-label {
+      display: block;
+      font-size: 14px;
+      color: var(--vscode-descriptionForeground);
+      margin-top: 4px;
     }
-    .progress-container {
-      background-color: var(--vscode-progressBar-background);
-      border-radius: 10px;
-      height: 20px;
+    
+    /* Progress */
+    .progress-track {
+      height: 4px;
+      background: var(--vscode-editor-inactiveSelectionBackground);
+      border-radius: 2px;
       overflow: hidden;
-      margin: 15px 0;
+      margin: 16px 0;
     }
-    .progress-bar {
+    .progress-fill {
       height: 100%;
-      border-radius: 10px;
+      background: var(--vscode-textLink-foreground);
+      border-radius: 2px;
       transition: width 0.3s ease;
     }
-    .progress-bar.low { background-color: #4caf50; }
-    .progress-bar.medium { background-color: #ff9800; }
-    .progress-bar.high { background-color: #f44336; }
-    .stats-grid {
-      display: grid;
-      grid-template-columns: repeat(2, 1fr);
-      gap: 15px;
-      margin-top: 15px;
+    
+    /* Stat Row */
+    .stat-row {
+      display: flex;
+      border-top: 1px solid var(--vscode-panel-border);
     }
-    .stat-item {
+    .stat-cell {
+      flex: 1;
+      padding: 16px;
       text-align: center;
-      padding: 15px;
-      background-color: var(--vscode-editor-background);
-      border-radius: 8px;
+    }
+    .stat-cell:not(:last-child) {
+      border-right: 1px solid var(--vscode-panel-border);
     }
     .stat-value {
-      font-size: 1.8em;
-      font-weight: bold;
-      color: var(--vscode-textLink-foreground);
+      display: block;
+      font-size: 20px;
+      font-weight: 500;
     }
     .stat-label {
-      font-size: 0.85em;
+      display: block;
+      font-size: 12px;
       color: var(--vscode-descriptionForeground);
-      margin-top: 5px;
+      margin-top: 2px;
     }
-    .billing-badge {
-      display: inline-block;
-      padding: 5px 12px;
-      border-radius: 15px;
-      background-color: var(--vscode-badge-background);
-      color: var(--vscode-badge-foreground);
-      font-size: 0.9em;
+    
+    /* List */
+    .list-group {
+      background: var(--vscode-editor-inactiveSelectionBackground);
+      border-radius: 12px;
+      overflow: hidden;
     }
-    .period-info {
-      color: var(--vscode-descriptionForeground);
-      font-size: 0.9em;
-      margin-top: 10px;
+    .list-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 14px 16px;
     }
-    .last-updated {
-      text-align: center;
-      color: var(--vscode-descriptionForeground);
-      font-size: 0.8em;
-      margin-top: 20px;
-    }
-    .events-table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 10px;
-      font-size: 0.9em;
-    }
-    .events-table th, .events-table td {
-      padding: 10px;
-      text-align: left;
+    .list-item:not(:last-child) {
       border-bottom: 1px solid var(--vscode-panel-border);
     }
-    .events-table th {
-      color: var(--vscode-descriptionForeground);
-      font-weight: normal;
+    .list-item-left {
+      display: flex;
+      flex-direction: column;
     }
-    .events-table tr:hover {
-      background-color: var(--vscode-list-hoverBackground);
+    .list-item-right {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+    }
+    .list-title {
+      font-size: 15px;
+      font-weight: 500;
+    }
+    .list-subtitle {
+      font-size: 13px;
+      color: var(--vscode-descriptionForeground);
+    }
+    .list-value {
+      font-size: 15px;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
+    }
+    .list-detail {
+      font-size: 13px;
+      color: var(--vscode-descriptionForeground);
+    }
+    
+    /* Footer */
+    .footer {
+      text-align: center;
+      font-size: 12px;
+      color: var(--vscode-descriptionForeground);
+      padding-top: 16px;
+      border-top: 1px solid var(--vscode-panel-border);
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>📊 Cursor Usage Statistics</h1>
-    
-    <div class="card">
-      <h2>Billing</h2>
-      <span class="billing-badge">${data.billingType === 'usage-based' ? '💳 Usage-Based (Token)' : '📊 Request-Based'}</span>
-      <p class="period-info">
-        📅 ${periodStart} - ${periodEnd}<br>
-        ⏳ ${daysLeft} days remaining
-      </p>
-    </div>
+    <header class="header">
+      <h1 class="header-title">Usage</h1>
+      <div class="header-meta">
+        <span class="meta-item">${periodStart} – ${periodEnd}</span>
+        <span class="meta-item">${daysLeft} days left</span>
+      </div>
+    </header>
 
-    ${usageContent}
+    ${mainContent}
 
-    <p class="last-updated">Last updated: ${new Date().toLocaleString()}</p>
+    <footer class="footer">
+      Updated ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+    </footer>
   </div>
 </body>
 </html>`;
