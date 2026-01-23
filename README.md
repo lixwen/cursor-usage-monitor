@@ -237,6 +237,14 @@ cursor-usage/
 
 ## Changelog
 
+### 0.1.4
+
+- **New**: Support for usage-based billing detection
+  - Automatically detects billing type (request-based vs usage-based)
+  - Shows cost for usage-based billing, requests for request-based
+  - Detailed tooltip shows recent requests and costs
+- **Improved**: Cleaner status bar display
+
 ### 0.1.3
 
 - **Improved**: No longer requires `sqlite3` to be installed

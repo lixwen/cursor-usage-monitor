@@ -197,12 +197,24 @@ async function refreshUsageData() {
     startRefreshTimer(config.refreshInterval);
   }
   
-  const response = await cursorApi.fetchUsageData(config.billingModel);
+  // Use combined usage data to support both billing types
+  const response = await cursorApi.fetchCombinedUsageData(config.billingModel);
 
   if (response.success && response.data) {
-    cachedUsageData = response.data;
-    statusBarManager.updateUsage(response.data);
-    log(`Usage data updated - premium: ${response.data.premiumRequestsUsed}/${response.data.premiumRequestsLimit}`);
+    // Also fetch legacy data for backward compatibility
+    const legacyResponse = await cursorApi.fetchUsageData(config.billingModel);
+    if (legacyResponse.success && legacyResponse.data) {
+      cachedUsageData = legacyResponse.data;
+    }
+    
+    // Update status bar with combined data
+    statusBarManager.updateCombinedUsage(response.data);
+    
+    if (response.data.billingType === 'usage-based' && response.data.usageBased) {
+      log(`Usage data updated - usage-based: $${response.data.usageBased.todayCost.toFixed(2)} today`);
+    } else if (response.data.requestBased) {
+      log(`Usage data updated - request-based: ${response.data.requestBased.used}/${response.data.requestBased.limit}`);
+    }
   } else {
     statusBarManager.setError(response.error || 'Unknown error');
     log(`API error: ${response.error}`);

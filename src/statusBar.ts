@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { UsageData, DisplayMode, BillingModel } from './types';
+import { UsageData, DisplayMode, BillingModel, CombinedUsageData } from './types';
 
 /**
  * Status Bar Manager
@@ -8,6 +8,7 @@ import { UsageData, DisplayMode, BillingModel } from './types';
 export class StatusBarManager {
   private statusBarItem: vscode.StatusBarItem;
   private displayMode: DisplayMode;
+  private cachedCombinedData: CombinedUsageData | null = null;
 
   constructor() {
     this.statusBarItem = vscode.window.createStatusBarItem(
@@ -17,6 +18,13 @@ export class StatusBarManager {
     this.statusBarItem.command = 'cursorUsage.showDetails';
     this.displayMode = 'both';
     this.setLoading();
+  }
+
+  /**
+   * Get cached combined data for details panel
+   */
+  public getCachedCombinedData(): CombinedUsageData | null {
+    return this.cachedCombinedData;
   }
 
   /**
@@ -82,6 +90,145 @@ export class StatusBarManager {
     this.statusBarItem.command = 'cursorUsage.showDetails';
     this.statusBarItem.backgroundColor = this.getBackgroundColor(data);
     this.statusBarItem.show();
+  }
+
+  /**
+   * Update status bar with combined usage data (supports both billing types)
+   */
+  public updateCombinedUsage(data: CombinedUsageData): void {
+    this.cachedCombinedData = data;
+    
+    let text: string;
+    let tooltip: vscode.MarkdownString;
+
+    if (data.billingType === 'usage-based' && data.usageBased) {
+      // Usage-based: show today's cost
+      const cost = data.usageBased.todayCost;
+      const tokens = data.usageBased.todayTokens;
+      
+      if (cost > 0) {
+        text = `$(credit-card) $${cost.toFixed(2)}`;
+      } else {
+        text = `$(credit-card) $0.00`;
+      }
+      
+      tooltip = this.formatUsageBasedTooltip(data);
+    } else if (data.requestBased) {
+      // Request-based: show requests used/limit
+      const { used, limit, percentage } = data.requestBased;
+      const icon = this.getRequestBasedIcon(percentage);
+      
+      switch (this.displayMode) {
+        case 'requests':
+          text = `${icon} ${used}/${limit}`;
+          break;
+        case 'percentage':
+          text = `${icon} ${percentage}%`;
+          break;
+        case 'both':
+        default:
+          text = `${icon} ${used}/${limit} (${percentage}%)`;
+      }
+      
+      tooltip = this.formatRequestBasedTooltip(data);
+    } else {
+      text = '$(question) No data';
+      tooltip = new vscode.MarkdownString('No usage data available');
+    }
+
+    this.statusBarItem.text = text;
+    this.statusBarItem.tooltip = tooltip;
+    this.statusBarItem.command = 'cursorUsage.showDetails';
+    this.statusBarItem.backgroundColor = undefined;
+    this.statusBarItem.show();
+  }
+
+  /**
+   * Get icon for request-based billing
+   */
+  private getRequestBasedIcon(percentage: number): string {
+    if (percentage >= 100) {
+      return '$(credit-card)';
+    } else if (percentage >= 90) {
+      return '$(rocket)';
+    } else if (percentage >= 75) {
+      return '$(zap)';
+    } else if (percentage >= 50) {
+      return '$(graph-line)';
+    } else {
+      return '$(check)';
+    }
+  }
+
+  /**
+   * Format tooltip for usage-based billing
+   */
+  private formatUsageBasedTooltip(data: CombinedUsageData): vscode.MarkdownString {
+    const md = new vscode.MarkdownString();
+    md.isTrusted = true;
+
+    md.appendMarkdown(`## Cursor Usage (Usage-Based)\n\n`);
+    
+    if (data.usageBased) {
+      const { todayCost, todayTokens, recentEvents } = data.usageBased;
+      
+      md.appendMarkdown(`### Today's Usage\n`);
+      md.appendMarkdown(`**Cost:** $${todayCost.toFixed(2)}\n\n`);
+      md.appendMarkdown(`**Tokens:** ${todayTokens.toLocaleString()}\n\n`);
+      
+      if (recentEvents.length > 0) {
+        md.appendMarkdown(`---\n\n`);
+        md.appendMarkdown(`### Recent Requests (${recentEvents.length})\n\n`);
+        
+        // Show last 5 events
+        const showEvents = recentEvents.slice(0, 5);
+        for (const event of showEvents) {
+          const costIcon = event.cost > 0.1 ? '🔶' : event.cost > 0 ? '🔹' : '⚪';
+          md.appendMarkdown(`${costIcon} ${event.costDisplay} • ${event.model} • ${event.tokens.toLocaleString()} tokens\n\n`);
+        }
+        
+        if (recentEvents.length > 5) {
+          md.appendMarkdown(`_...and ${recentEvents.length - 5} more_\n\n`);
+        }
+      }
+    }
+
+    md.appendMarkdown(`---\n\n`);
+    md.appendMarkdown(`*Click for detailed view • ${new Date().toLocaleTimeString()}*`);
+
+    return md;
+  }
+
+  /**
+   * Format tooltip for request-based billing
+   */
+  private formatRequestBasedTooltip(data: CombinedUsageData): vscode.MarkdownString {
+    const md = new vscode.MarkdownString();
+    md.isTrusted = true;
+
+    md.appendMarkdown(`## Cursor Usage (Request-Based)\n\n`);
+    
+    if (data.requestBased) {
+      const { used, limit, percentage } = data.requestBased;
+      const progressBar = this.createProgressBar(Math.min(100, percentage));
+      
+      md.appendMarkdown(`### Premium Requests\n`);
+      md.appendMarkdown(`${progressBar} **${percentage}%**\n\n`);
+      md.appendMarkdown(`**Used:** ${used} / ${limit}\n\n`);
+      md.appendMarkdown(`**Remaining:** ${Math.max(0, limit - used)}\n\n`);
+    }
+
+    md.appendMarkdown(`---\n\n`);
+    md.appendMarkdown(`### Billing Period\n`);
+    md.appendMarkdown(`${this.formatDate(data.periodStart)} - ${this.formatDate(data.periodEnd)}\n\n`);
+    
+    const daysLeft = this.calculateDaysLeft(data.periodEnd);
+    md.appendMarkdown(`**${daysLeft}** days remaining\n\n`);
+
+    md.appendMarkdown(`---\n\n`);
+    md.appendMarkdown(`*Click for detailed view • ${new Date().toLocaleTimeString()}*`);
+
+    return md;
   }
 
   /**

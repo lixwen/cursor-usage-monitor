@@ -107,3 +107,61 @@ export interface TeamSpendResponse {
   hasAnySpendLimitOverrides: boolean;
   hasAnyFreeUsage: boolean;
 }
+
+/**
+ * Usage event for usage-based billing
+ */
+export interface UsageEvent {
+  timestamp: string;
+  date: string;
+  time: string;
+  model: string;
+  tokens: number;
+  cost: number;
+  costDisplay: string;
+  kind: string;
+}
+
+/**
+ * Usage events response from /api/dashboard/get-filtered-usage-events
+ */
+export interface UsageEventsResponse {
+  usageEventsDisplay: Array<{
+    timestamp: string;
+    model: string;
+    kind: string;
+    usageBasedCosts: string | number | object;
+    tokenUsage?: {
+      cacheWriteTokens?: number;
+      cacheReadTokens?: number;
+      inputTokens?: number;
+      outputTokens?: number;
+    };
+  }>;
+}
+
+/**
+ * Combined usage data that supports both billing types
+ */
+export interface CombinedUsageData {
+  /** Billing type detected */
+  billingType: 'request-based' | 'usage-based';
+  
+  /** Request-based data (if applicable) */
+  requestBased?: {
+    used: number;
+    limit: number;
+    percentage: number;
+  };
+  
+  /** Usage-based data (if applicable) */
+  usageBased?: {
+    todayCost: number;
+    todayTokens: number;
+    recentEvents: UsageEvent[];
+  };
+  
+  /** Period info */
+  periodStart: Date;
+  periodEnd: Date;
+}

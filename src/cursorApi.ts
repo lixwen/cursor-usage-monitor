@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { URL } from 'url';
 import { execSync } from 'child_process';
-import { UsageData, BillingModel, CursorUsageResponse, BILLING_LIMITS, ApiResponse, TeamsResponse, TeamSpendResponse, TeamInfo } from './types';
+import { UsageData, BillingModel, CursorUsageResponse, BILLING_LIMITS, ApiResponse, TeamsResponse, TeamSpendResponse, TeamInfo, UsageEvent, UsageEventsResponse, CombinedUsageData } from './types';
 
 // Use asm.js version of sql.js (pure JavaScript, no WASM needed)
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -599,5 +599,191 @@ export class CursorApiService {
     this.userId = null;
     await this.context.secrets.delete('cursorSessionToken');
     log('Credentials cleared');
+  }
+
+  /**
+   * Fetch usage events for usage-based billing
+   */
+  public async fetchUsageEvents(timeRange: 'today' | 'last24h' = 'today'): Promise<ApiResponse<UsageEvent[]>> {
+    if (!this.sessionToken || !this.userId) {
+      return {
+        success: false,
+        error: 'Not authenticated'
+      };
+    }
+
+    try {
+      const now = Date.now();
+      let startTime: number;
+      
+      if (timeRange === 'today') {
+        // Start of today
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        startTime = today.getTime();
+      } else {
+        // Last 24 hours
+        startTime = now - (24 * 60 * 60 * 1000);
+      }
+
+      const response = await this.makeApiRequest<UsageEventsResponse>('POST', '/dashboard/get-filtered-usage-events', {
+        teamId: 0,
+        startDate: startTime.toString(),
+        endDate: now.toString(),
+        page: 1,
+        pageSize: 100
+      });
+
+      if (!response.success || !response.data) {
+        return {
+          success: false,
+          error: response.error || 'Failed to fetch usage events'
+        };
+      }
+
+      const events = this.transformUsageEvents(response.data);
+      return {
+        success: true,
+        data: events
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
+  }
+
+  /**
+   * Transform usage events response
+   */
+  private transformUsageEvents(response: UsageEventsResponse): UsageEvent[] {
+    if (!response.usageEventsDisplay) {
+      return [];
+    }
+
+    return response.usageEventsDisplay.map(event => {
+      const eventDate = new Date(parseInt(event.timestamp));
+      const costInfo = this.parseCost(event.usageBasedCosts);
+      const tokens = (event.tokenUsage?.cacheWriteTokens || 0) +
+                     (event.tokenUsage?.cacheReadTokens || 0) +
+                     (event.tokenUsage?.inputTokens || 0) +
+                     (event.tokenUsage?.outputTokens || 0);
+
+      return {
+        timestamp: event.timestamp,
+        date: eventDate.toLocaleDateString(),
+        time: eventDate.toLocaleTimeString(),
+        model: event.model || 'Unknown',
+        tokens,
+        cost: costInfo.numericValue,
+        costDisplay: costInfo.displayValue,
+        kind: event.kind || 'Unknown'
+      };
+    });
+  }
+
+  /**
+   * Parse cost from various formats
+   */
+  private parseCost(usageBasedCosts: string | number | object | undefined): { numericValue: number; displayValue: string } {
+    if (!usageBasedCosts) {
+      return { numericValue: 0, displayValue: '$0.00' };
+    }
+
+    if (typeof usageBasedCosts === 'string') {
+      const cleanCost = usageBasedCosts.replace(/[$,]/g, '');
+      const parsedCost = parseFloat(cleanCost);
+      return {
+        numericValue: isNaN(parsedCost) ? 0 : parsedCost,
+        displayValue: usageBasedCosts
+      };
+    }
+
+    if (typeof usageBasedCosts === 'number') {
+      return {
+        numericValue: usageBasedCosts,
+        displayValue: `$${usageBasedCosts.toFixed(2)}`
+      };
+    }
+
+    return { numericValue: 0, displayValue: '$0.00' };
+  }
+
+  /**
+   * Fetch combined usage data with automatic billing type detection
+   */
+  public async fetchCombinedUsageData(billingModel: BillingModel): Promise<ApiResponse<CombinedUsageData>> {
+    if (!this.sessionToken || !this.userId) {
+      return {
+        success: false,
+        error: 'Not authenticated'
+      };
+    }
+
+    try {
+      // First, fetch request-based usage data
+      const usageResponse = await this.fetchUsageData(billingModel);
+      
+      // Calculate period dates
+      const now = new Date();
+      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+
+      // If usage-based billing or premium exhausted, fetch usage events
+      if (billingModel === 'usage-based' || 
+          (usageResponse.success && usageResponse.data?.isPremiumExhausted)) {
+        
+        const eventsResponse = await this.fetchUsageEvents('today');
+        
+        if (eventsResponse.success && eventsResponse.data) {
+          const events = eventsResponse.data;
+          const todayCost = events.reduce((sum, e) => sum + e.cost, 0);
+          const todayTokens = events.reduce((sum, e) => sum + e.tokens, 0);
+
+          return {
+            success: true,
+            data: {
+              billingType: 'usage-based',
+              usageBased: {
+                todayCost,
+                todayTokens,
+                recentEvents: events.sort((a, b) => parseInt(b.timestamp) - parseInt(a.timestamp))
+              },
+              periodStart: startOfMonth,
+              periodEnd: endOfMonth
+            }
+          };
+        }
+      }
+
+      // Return request-based data
+      if (usageResponse.success && usageResponse.data) {
+        const data = usageResponse.data;
+        return {
+          success: true,
+          data: {
+            billingType: 'request-based',
+            requestBased: {
+              used: data.premiumRequestsUsed,
+              limit: data.premiumRequestsLimit,
+              percentage: Math.round((data.premiumRequestsUsed / data.premiumRequestsLimit) * 100)
+            },
+            periodStart: data.periodStart,
+            periodEnd: data.periodEnd
+          }
+        };
+      }
+
+      return {
+        success: false,
+        error: usageResponse.error || 'Failed to fetch usage data'
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      };
+    }
   }
 }
