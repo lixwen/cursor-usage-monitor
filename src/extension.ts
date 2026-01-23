@@ -337,12 +337,29 @@ async function showUsageDetails() {
 
 /**
  * Generate webview HTML content for combined usage data
- * Design: Apple-inspired, clean, minimal
+ * Design: iStats-inspired with ring gauges and compact layout
  */
 function getWebviewContent(data: CombinedUsageData): string {
   const periodStart = data.periodStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-  const periodEnd = data.periodEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  const periodEnd = data.periodEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
   const daysLeft = Math.max(0, Math.ceil((data.periodEnd.getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
+  const totalDays = Math.ceil((data.periodEnd.getTime() - data.periodStart.getTime()) / (1000 * 60 * 60 * 24));
+  const daysUsedPct = Math.round(((totalDays - daysLeft) / totalDays) * 100);
+
+  // SVG ring helper
+  const createRing = (percent: number, color: string, size: number = 80) => {
+    const radius = (size - 8) / 2;
+    const circumference = 2 * Math.PI * radius;
+    const offset = circumference - (percent / 100) * circumference;
+    return `
+      <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}">
+        <circle cx="${size/2}" cy="${size/2}" r="${radius}" fill="none" stroke="var(--ring-bg)" stroke-width="6"/>
+        <circle cx="${size/2}" cy="${size/2}" r="${radius}" fill="none" stroke="${color}" stroke-width="6"
+          stroke-dasharray="${circumference}" stroke-dashoffset="${offset}" stroke-linecap="round"
+          transform="rotate(-90 ${size/2} ${size/2})"/>
+      </svg>
+    `;
+  };
 
   let mainContent = '';
   
@@ -352,66 +369,96 @@ function getWebviewContent(data: CombinedUsageData): string {
     // Format cost
     let costDisplay: string;
     if (todayCost === 0) {
-      costDisplay = '$0.00';
+      costDisplay = '$0';
     } else if (todayCost < 0.01) {
-      costDisplay = `${(todayCost * 100).toFixed(2)}¢`;
+      costDisplay = `${(todayCost * 100).toFixed(1)}¢`;
     } else if (todayCost < 1) {
-      costDisplay = `$${todayCost.toFixed(3)}`;
+      costDisplay = `$${todayCost.toFixed(2)}`;
     } else {
       costDisplay = `$${todayCost.toFixed(2)}`;
+    }
+
+    // Format tokens
+    let tokensDisplay: string;
+    if (todayTokens >= 1000000) {
+      tokensDisplay = `${(todayTokens / 1000000).toFixed(1)}M`;
+    } else if (todayTokens >= 1000) {
+      tokensDisplay = `${(todayTokens / 1000).toFixed(1)}K`;
+    } else {
+      tokensDisplay = todayTokens.toString();
     }
 
     // Events list
     let eventsHtml = '';
     if (recentEvents.length > 0) {
-      const eventItems = recentEvents.map(event => {
+      const eventItems = recentEvents.slice(0, 10).map(event => {
         const time = new Date(parseInt(event.timestamp)).toLocaleTimeString('en-US', { 
-          hour: 'numeric', 
-          minute: '2-digit',
-          hour12: true 
+          hour: 'numeric', minute: '2-digit', hour12: false 
         });
+        const tokens = event.tokens >= 1000 ? `${(event.tokens / 1000).toFixed(1)}K` : event.tokens;
         return `
-          <div class="list-item">
-            <div class="list-item-left">
-              <span class="list-title">${event.model}</span>
-              <span class="list-subtitle">${time}</span>
-            </div>
-            <div class="list-item-right">
-              <span class="list-value">${event.costDisplay}</span>
-              <span class="list-detail">${event.tokens.toLocaleString()} tokens</span>
-            </div>
+          <div class="event-row">
+            <span class="event-time">${time}</span>
+            <span class="event-model">${event.model}</span>
+            <span class="event-tokens">${tokens}</span>
+            <span class="event-cost">${event.costDisplay}</span>
           </div>
         `;
       }).join('');
 
       eventsHtml = `
-        <section class="section">
-          <h2 class="section-title">Activity</h2>
-          <div class="list-group">
+        <div class="panel">
+          <div class="panel-header">
+            <span class="panel-title">Activity</span>
+            <span class="panel-badge">${recentEvents.length}</span>
+          </div>
+          <div class="event-list">
+            <div class="event-row event-header">
+              <span class="event-time">Time</span>
+              <span class="event-model">Model</span>
+              <span class="event-tokens">Tokens</span>
+              <span class="event-cost">Cost</span>
+            </div>
             ${eventItems}
           </div>
-        </section>
+        </div>
       `;
     }
 
+    // Calculate a pseudo percentage for the ring (based on a daily budget estimate)
+    const costPct = Math.min(100, Math.round(todayCost * 100)); // $1 = 100%
+
     mainContent = `
-      <section class="section">
-        <h2 class="section-title">Today</h2>
-        <div class="hero-stat">
-          <span class="hero-value">${costDisplay}</span>
-          <span class="hero-label">spent</span>
-        </div>
-        <div class="stat-row">
-          <div class="stat-cell">
-            <span class="stat-value">${todayTokens.toLocaleString()}</span>
-            <span class="stat-label">tokens</span>
+      <div class="gauge-grid">
+        <div class="gauge-item">
+          <div class="gauge-ring">
+            ${createRing(costPct, '#34C759')}
+            <div class="gauge-value">${costDisplay}</div>
           </div>
-          <div class="stat-cell">
-            <span class="stat-value">${recentEvents.length}</span>
-            <span class="stat-label">requests</span>
-          </div>
+          <div class="gauge-label">Cost</div>
         </div>
-      </section>
+        <div class="gauge-item">
+          <div class="gauge-ring">
+            ${createRing(Math.min(100, recentEvents.length * 10), '#007AFF')}
+            <div class="gauge-value">${recentEvents.length}</div>
+          </div>
+          <div class="gauge-label">Requests</div>
+        </div>
+        <div class="gauge-item">
+          <div class="gauge-ring">
+            ${createRing(Math.min(100, todayTokens / 500), '#AF52DE')}
+            <div class="gauge-value">${tokensDisplay}</div>
+          </div>
+          <div class="gauge-label">Tokens</div>
+        </div>
+        <div class="gauge-item">
+          <div class="gauge-ring">
+            ${createRing(daysUsedPct, '#FF9500')}
+            <div class="gauge-value">${daysLeft}</div>
+          </div>
+          <div class="gauge-label">Days Left</div>
+        </div>
+      </div>
       ${eventsHtml}
     `;
   } else if (data.requestBased) {
@@ -419,26 +466,36 @@ function getWebviewContent(data: CombinedUsageData): string {
     const remaining = Math.max(0, limit - used);
 
     mainContent = `
-      <section class="section">
-        <h2 class="section-title">Requests</h2>
-        <div class="hero-stat">
-          <span class="hero-value">${used}<span class="hero-total">/${limit}</span></span>
-          <span class="hero-label">used</span>
-        </div>
-        <div class="progress-track">
-          <div class="progress-fill" style="width: ${Math.min(100, percentage)}%"></div>
-        </div>
-        <div class="stat-row">
-          <div class="stat-cell">
-            <span class="stat-value">${remaining}</span>
-            <span class="stat-label">remaining</span>
+      <div class="gauge-grid">
+        <div class="gauge-item">
+          <div class="gauge-ring">
+            ${createRing(percentage, percentage >= 90 ? '#FF3B30' : percentage >= 75 ? '#FF9500' : '#34C759')}
+            <div class="gauge-value">${percentage}%</div>
           </div>
-          <div class="stat-cell">
-            <span class="stat-value">${percentage}%</span>
-            <span class="stat-label">used</span>
-          </div>
+          <div class="gauge-label">Used</div>
         </div>
-      </section>
+        <div class="gauge-item">
+          <div class="gauge-ring">
+            ${createRing(100 - percentage, '#007AFF')}
+            <div class="gauge-value">${remaining}</div>
+          </div>
+          <div class="gauge-label">Remaining</div>
+        </div>
+        <div class="gauge-item">
+          <div class="gauge-ring">
+            ${createRing(100, '#8E8E93')}
+            <div class="gauge-value">${limit}</div>
+          </div>
+          <div class="gauge-label">Limit</div>
+        </div>
+        <div class="gauge-item">
+          <div class="gauge-ring">
+            ${createRing(daysUsedPct, '#FF9500')}
+            <div class="gauge-value">${daysLeft}</div>
+          </div>
+          <div class="gauge-label">Days Left</div>
+        </div>
+      </div>
     `;
   }
 
@@ -447,189 +504,175 @@ function getWebviewContent(data: CombinedUsageData): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Usage</title>
+  <title>Cursor Usage</title>
   <style>
+    :root {
+      --ring-bg: rgba(120, 120, 128, 0.2);
+    }
     * {
       margin: 0;
       padding: 0;
       box-sizing: border-box;
     }
     body {
-      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', sans-serif;
       background: var(--vscode-editor-background);
       color: var(--vscode-foreground);
-      line-height: 1.5;
+      font-size: 13px;
       -webkit-font-smoothing: antialiased;
     }
     .container {
-      max-width: 480px;
+      max-width: 420px;
       margin: 0 auto;
-      padding: 32px 24px;
+      padding: 20px;
     }
     
     /* Header */
     .header {
-      margin-bottom: 32px;
-    }
-    .header-title {
-      font-size: 28px;
-      font-weight: 600;
-      letter-spacing: -0.5px;
-      margin-bottom: 8px;
-    }
-    .header-meta {
-      display: flex;
-      gap: 16px;
-      font-size: 13px;
-      color: var(--vscode-descriptionForeground);
-    }
-    .meta-item {
-      display: flex;
-      align-items: center;
-      gap: 4px;
-    }
-    
-    /* Section */
-    .section {
-      margin-bottom: 32px;
-    }
-    .section-title {
-      font-size: 13px;
-      font-weight: 500;
-      text-transform: uppercase;
-      letter-spacing: 0.5px;
-      color: var(--vscode-descriptionForeground);
-      margin-bottom: 16px;
-    }
-    
-    /* Hero Stat */
-    .hero-stat {
-      text-align: center;
-      padding: 24px 0;
-    }
-    .hero-value {
-      font-size: 48px;
-      font-weight: 300;
-      letter-spacing: -2px;
-      color: var(--vscode-textLink-foreground);
-    }
-    .hero-total {
-      font-size: 24px;
-      color: var(--vscode-descriptionForeground);
-    }
-    .hero-label {
-      display: block;
-      font-size: 14px;
-      color: var(--vscode-descriptionForeground);
-      margin-top: 4px;
-    }
-    
-    /* Progress */
-    .progress-track {
-      height: 4px;
-      background: var(--vscode-editor-inactiveSelectionBackground);
-      border-radius: 2px;
-      overflow: hidden;
-      margin: 16px 0;
-    }
-    .progress-fill {
-      height: 100%;
-      background: var(--vscode-textLink-foreground);
-      border-radius: 2px;
-      transition: width 0.3s ease;
-    }
-    
-    /* Stat Row */
-    .stat-row {
-      display: flex;
-      border-top: 1px solid var(--vscode-panel-border);
-    }
-    .stat-cell {
-      flex: 1;
-      padding: 16px;
-      text-align: center;
-    }
-    .stat-cell:not(:last-child) {
-      border-right: 1px solid var(--vscode-panel-border);
-    }
-    .stat-value {
-      display: block;
-      font-size: 20px;
-      font-weight: 500;
-    }
-    .stat-label {
-      display: block;
-      font-size: 12px;
-      color: var(--vscode-descriptionForeground);
-      margin-top: 2px;
-    }
-    
-    /* List */
-    .list-group {
-      background: var(--vscode-editor-inactiveSelectionBackground);
-      border-radius: 12px;
-      overflow: hidden;
-    }
-    .list-item {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 14px 16px;
-    }
-    .list-item:not(:last-child) {
+      margin-bottom: 20px;
+      padding-bottom: 12px;
       border-bottom: 1px solid var(--vscode-panel-border);
     }
-    .list-item-left {
-      display: flex;
-      flex-direction: column;
+    .header-title {
+      font-size: 16px;
+      font-weight: 600;
     }
-    .list-item-right {
-      display: flex;
-      flex-direction: column;
-      align-items: flex-end;
-    }
-    .list-title {
-      font-size: 15px;
-      font-weight: 500;
-    }
-    .list-subtitle {
-      font-size: 13px;
+    .header-period {
+      font-size: 12px;
       color: var(--vscode-descriptionForeground);
     }
-    .list-value {
-      font-size: 15px;
-      font-weight: 500;
+    
+    /* Gauge Grid */
+    .gauge-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin-bottom: 20px;
+    }
+    .gauge-item {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+    .gauge-ring {
+      position: relative;
+      width: 80px;
+      height: 80px;
+    }
+    .gauge-ring svg {
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+    .gauge-value {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 14px;
+      font-weight: 600;
       font-variant-numeric: tabular-nums;
     }
-    .list-detail {
-      font-size: 13px;
+    .gauge-label {
+      margin-top: 6px;
+      font-size: 11px;
       color: var(--vscode-descriptionForeground);
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    
+    /* Panel */
+    .panel {
+      background: var(--vscode-editor-inactiveSelectionBackground);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--vscode-panel-border);
+    }
+    .panel-title {
+      font-size: 12px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    .panel-badge {
+      font-size: 11px;
+      padding: 2px 6px;
+      background: var(--vscode-badge-background);
+      color: var(--vscode-badge-foreground);
+      border-radius: 10px;
+    }
+    
+    /* Event List */
+    .event-list {
+      font-size: 12px;
+    }
+    .event-row {
+      display: grid;
+      grid-template-columns: 50px 1fr 60px 70px;
+      padding: 8px 12px;
+      align-items: center;
+    }
+    .event-row:not(:last-child) {
+      border-bottom: 1px solid var(--vscode-panel-border);
+    }
+    .event-header {
+      color: var(--vscode-descriptionForeground);
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+    .event-time {
+      font-variant-numeric: tabular-nums;
+      color: var(--vscode-descriptionForeground);
+    }
+    .event-model {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .event-tokens {
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      color: var(--vscode-descriptionForeground);
+    }
+    .event-cost {
+      text-align: right;
+      font-weight: 500;
+      font-variant-numeric: tabular-nums;
     }
     
     /* Footer */
     .footer {
-      text-align: center;
-      font-size: 12px;
-      color: var(--vscode-descriptionForeground);
-      padding-top: 16px;
+      margin-top: 16px;
+      padding-top: 12px;
       border-top: 1px solid var(--vscode-panel-border);
+      display: flex;
+      justify-content: center;
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground);
     }
   </style>
 </head>
 <body>
   <div class="container">
     <header class="header">
-      <h1 class="header-title">Usage</h1>
-      <div class="header-meta">
-        <span class="meta-item">${periodStart} – ${periodEnd}</span>
-        <span class="meta-item">${daysLeft} days left</span>
-      </div>
+      <span class="header-title">Cursor Usage</span>
+      <span class="header-period">${periodStart} – ${periodEnd}</span>
     </header>
 
     ${mainContent}
 
     <footer class="footer">
-      Updated ${new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}
+      Updated ${new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', hour12: false })}
     </footer>
   </div>
 </body>
