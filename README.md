@@ -9,19 +9,19 @@ A VS Code extension that displays real-time Cursor AI usage statistics in the st
 
 ## Current Status
 
-> **⚠️ Note**: This extension is currently in early development. Only **Team accounts with request-based billing** have been tested and verified. Other account types (Free, Pro individual, Business, Usage-Based) are not yet fully adapted.
+> **Note**: All Cursor plans (Free, Pro, Business) now use **usage-based billing** (token-based). This extension automatically detects your account type and displays usage accordingly.
 
 ## Features
 
 - **Auto Token Detection**: Automatically reads your Cursor authentication token from local SQLite database
-- **Real-time Status Bar Display**: See your Cursor usage at a glance in the VS Code status bar
-- **Multiple Display Modes**: Choose between requests count, percentage, or both
-- **Team Account Support**: Currently optimized for Team accounts with request-based billing
-- **Visual Indicators**: Color-coded warnings when approaching usage limits
-- **Detailed Usage Panel**: Click to view comprehensive usage statistics
+- **Auto Account Detection**: Detects your billing type from Cursor API
+- **Real-time Status Bar Display**: Clean, minimal display showing today's cost or request count
+- **Usage-Based Support**: Shows cost in dollars/cents for token-based billing
+- **Detailed Usage Panel**: Click to view usage statistics with Apple-inspired design
+- **Activity History**: View recent requests with model, tokens, and cost
 - **Auto-refresh**: Configurable automatic refresh interval
 - **Secure Token Storage**: Your API credentials are stored securely using VS Code's secret storage
-- **Debug Logging**: Output channel for troubleshooting token detection issues
+- **Debug Logging**: Output channel for troubleshooting
 
 ## Installation
 
@@ -114,26 +114,25 @@ Configure the extension in VS Code settings (`File > Preferences > Settings`):
 | `Cursor Usage: Set Session Token` | Configure your Cursor session token |
 | `Cursor Usage: Clear Saved Token` | Clear stored token (useful for debugging) |
 
-## Status Bar Indicators
+## Status Bar Display
 
-The status bar icon changes based on your usage level (friendly, non-intrusive design):
+The status bar shows your usage in a clean, minimal format:
 
-| Icon | Usage Level | Description |
-|------|-------------|-------------|
-| $(check) | < 50% | Everything is fine |
-| $(graph-line) | 50-74% | Usage trending up |
-| $(zap) | 75-89% | Getting busy |
-| $(rocket) | ≥ 90% | Fast consumption |
-| $(credit-card) | 100% | Exhausted / On-Demand mode |
+| Billing Type | Display Example | Description |
+|--------------|-----------------|-------------|
+| Usage-Based | `Cursor $0.03` | Today's cost in dollars |
+| Usage-Based | `Cursor 2.64¢` | Today's cost in cents (if < $0.01) |
+| Request-Based | `Cursor 5/50` | Requests used / limit |
 
-## Billing Plans Reference
+## Billing Plans
 
-| Plan | Premium Requests | Standard Requests |
-|------|-----------------|-------------------|
-| Free | 50/month | 200/month |
-| Pro | 500/month | Unlimited |
-| Business | 500/month | Unlimited |
-| Usage-Based | Pay-as-you-go | Pay-as-you-go |
+All Cursor plans now use token-based billing:
+
+| Plan | Billing Type | Display |
+|------|--------------|---------|
+| Free | Usage-Based (Token) | Cost per request |
+| Pro | Usage-Based (Token) | Cost per request |
+| Business | Usage-Based (Token) | Cost per request |
 
 ## Privacy & Security
 
@@ -218,24 +217,30 @@ cursor-usage/
 
 | Account Type | Status | Notes |
 |--------------|--------|-------|
-| Team (Request-based) | ✅ Supported | Currently tested and working |
-| Pro (Individual) | 🚧 Planned | API integration pending |
-| Business | 🚧 Planned | API integration pending |
-| Free | 🚧 Planned | API integration pending |
-| Usage-Based (Pay-as-you-go) | 🚧 Planned | API integration pending |
+| Free | ✅ Supported | Token-based billing |
+| Pro | ✅ Supported | Token-based billing |
+| Business | ✅ Supported | Token-based billing |
+| Team | ✅ Supported | Token-based billing |
 
 ### Planned Features
 
-- [ ] Support for Pro individual accounts
-- [ ] Support for Free tier accounts
-- [ ] Support for Business accounts
-- [ ] Support for Usage-Based billing (cost tracking)
-- [ ] Auto-detect account type from API response
+- [x] Support for all account types
+- [x] Auto-detect account type from API
+- [x] Usage-Based billing (cost tracking)
 - [ ] Multi-account switching support
 - [ ] Usage history and trends visualization
 - [ ] Export usage data to CSV/JSON
 
 ## Changelog
+
+### 0.1.5
+
+- **New**: All account types now supported (Free, Pro, Business, Team)
+- **New**: Auto-detect billing type from `/api/auth/stripe`
+- **New**: Apple-inspired minimal design for details panel
+- **Improved**: Clean status bar format: `Cursor $0.03` or `Cursor 2.64¢`
+- **Improved**: Activity list shows recent requests with time, model, tokens, cost
+- **Fixed**: Correct parsing of `tokenUsage.totalCents` from API
 
 ### 0.1.4
 
