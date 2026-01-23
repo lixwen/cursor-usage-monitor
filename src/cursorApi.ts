@@ -616,7 +616,8 @@ export class CursorApiService {
 
   /**
    * Auto-detect billing model from API
-   * Note: All plans (including free) are now usage-based (token billing)
+   * - Team accounts may have request-based billing (check maxRequestUsage)
+   * - Individual accounts are now usage-based (token billing)
    */
   public async detectBillingModel(): Promise<BillingModel> {
     // Return cached if available
@@ -625,28 +626,58 @@ export class CursorApiService {
     }
 
     try {
-      const response = await this.fetchBillingInfo();
+      const billingResponse = await this.fetchBillingInfo();
       
-      if (response.success && response.data) {
-        const info = response.data;
+      if (billingResponse.success && billingResponse.data) {
+        const info = billingResponse.data;
         let model: BillingModel;
 
         // Check team membership first
-        if (info.isTeamMember && info.teamMembershipType) {
-          // Team member - check team type
-          if (info.teamMembershipType === 'business' || info.teamMembershipType === 'enterprise') {
-            model = 'business';
+        if (info.isTeamMember) {
+          // Team member - check if request-based by looking at usage API
+          const usageResponse = await this.makeApiRequest<CursorUsageResponse>('GET', `/usage?user=${this.userId}`);
+          
+          if (usageResponse.success && usageResponse.data) {
+            const gpt4Data = usageResponse.data['gpt-4'];
+            // If maxRequestUsage is set (not null), it's request-based
+            if (gpt4Data?.maxRequestUsage !== null && gpt4Data?.maxRequestUsage !== undefined) {
+              model = info.teamMembershipType === 'business' ? 'business' : 'pro';
+              log(`Team account with request limit: ${gpt4Data.maxRequestUsage}`);
+            } else {
+              // No request limit, usage-based
+              model = 'usage-based';
+            }
+          } else {
+            // Default team to business
+            model = info.teamMembershipType === 'business' ? 'business' : 'pro';
+          }
+        } else {
+          // Individual account - check membership type
+          const memberType = info.membershipType || info.individualMembershipType;
+          
+          if (memberType === 'free' || memberType === 'free_trial') {
+            // Free accounts are now usage-based
+            model = 'usage-based';
+          } else if (memberType === 'pro' || memberType === 'hobby') {
+            // Pro individual - check if has request limit
+            const usageResponse = await this.makeApiRequest<CursorUsageResponse>('GET', `/usage?user=${this.userId}`);
+            if (usageResponse.success && usageResponse.data) {
+              const gpt4Data = usageResponse.data['gpt-4'];
+              if (gpt4Data?.maxRequestUsage !== null && gpt4Data?.maxRequestUsage !== undefined) {
+                model = 'pro';
+              } else {
+                model = 'usage-based';
+              }
+            } else {
+              model = 'usage-based';
+            }
           } else {
             model = 'usage-based';
           }
-        } else {
-          // All individual plans are now usage-based (including free)
-          // Just record the membership type for display purposes
-          model = 'usage-based';
         }
 
         this.detectedBillingModel = model;
-        log(`Auto-detected billing model: ${model} (membershipType=${info.membershipType}, isTeamMember=${info.isTeamMember})`);
+        log(`Auto-detected billing model: ${model} (membershipType=${info.membershipType}, isTeamMember=${info.isTeamMember}, teamType=${info.teamMembershipType})`);
         return model;
       }
     } catch (error) {
@@ -806,7 +837,8 @@ export class CursorApiService {
 
   /**
    * Fetch combined usage data with automatic billing type detection
-   * Note: All Cursor plans are now usage-based (token billing)
+   * - Team accounts with request limits: show request-based data
+   * - Usage-based accounts: show cost and token data
    */
   public async fetchCombinedUsageData(configBillingModel: BillingModel): Promise<ApiResponse<CombinedUsageData>> {
     if (!this.sessionToken || !this.userId) {
@@ -826,7 +858,31 @@ export class CursorApiService {
       const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
       const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
 
-      // All plans are now usage-based, fetch usage events
+      // For request-based billing (pro, business with request limits)
+      if (billingModel === 'pro' || billingModel === 'business') {
+        const usageResponse = await this.fetchUsageData(billingModel);
+        
+        if (usageResponse.success && usageResponse.data) {
+          const data = usageResponse.data;
+          const limit = data.premiumRequestsLimit || BILLING_LIMITS[billingModel].premium;
+          
+          return {
+            success: true,
+            data: {
+              billingType: 'request-based',
+              requestBased: {
+                used: data.premiumRequestsUsed,
+                limit: limit,
+                percentage: limit > 0 ? Math.round((data.premiumRequestsUsed / limit) * 100) : 0
+              },
+              periodStart: data.periodStart,
+              periodEnd: data.periodEnd
+            }
+          };
+        }
+      }
+
+      // For usage-based billing (free, usage-based plans)
       const eventsResponse = await this.fetchUsageEvents('today');
       
       if (eventsResponse.success && eventsResponse.data) {
