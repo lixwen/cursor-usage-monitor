@@ -187,6 +187,9 @@ export interface CombinedUsageData {
     recentEvents: UsageEvent[];
   };
   
+  /** Recent events (for both billing types) */
+  recentEvents?: UsageEvent[];
+  
   /** Period info */
   periodStart: Date;
   periodEnd: Date;

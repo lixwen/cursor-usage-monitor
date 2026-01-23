@@ -417,13 +417,61 @@ function getWebviewContent(data: CombinedUsageData): string {
   } else if (data.requestBased) {
     const { used, limit, percentage } = data.requestBased;
     const remaining = Math.max(0, limit - used);
+    const recentEvents = data.recentEvents || [];
+
+    // Calculate today's stats from events
+    const todayTokens = recentEvents.reduce((sum, e) => sum + e.tokens, 0);
+    const todayCost = recentEvents.reduce((sum, e) => sum + e.cost, 0);
+
+    // Events list for request-based
+    let eventsHtml = '';
+    if (recentEvents.length > 0) {
+      const eventItems = recentEvents.map(event => {
+        const time = new Date(parseInt(event.timestamp)).toLocaleTimeString('en-US', { 
+          hour: 'numeric', 
+          minute: '2-digit',
+          hour12: true 
+        });
+        return `
+          <div class="list-item">
+            <div class="list-item-left">
+              <span class="list-title">${event.model}</span>
+              <span class="list-subtitle">${time}</span>
+            </div>
+            <div class="list-item-right">
+              <span class="list-value">${event.tokens.toLocaleString()} tokens</span>
+              <span class="list-detail">${event.costDisplay}</span>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      eventsHtml = `
+        <section class="section">
+          <h2 class="section-title">Today's Activity</h2>
+          <div class="list-group">
+            ${eventItems}
+          </div>
+        </section>
+      `;
+    }
+
+    // Format today's cost
+    let todayCostDisplay = '';
+    if (todayCost > 0) {
+      if (todayCost < 0.01) {
+        todayCostDisplay = `${(todayCost * 100).toFixed(2)}¢`;
+      } else {
+        todayCostDisplay = `$${todayCost.toFixed(2)}`;
+      }
+    }
 
     mainContent = `
       <section class="section">
-        <h2 class="section-title">Requests</h2>
+        <h2 class="section-title">This Month</h2>
         <div class="hero-stat">
           <span class="hero-value">${used}<span class="hero-total">/${limit}</span></span>
-          <span class="hero-label">used</span>
+          <span class="hero-label">requests used</span>
         </div>
         <div class="progress-track">
           <div class="progress-fill" style="width: ${Math.min(100, percentage)}%"></div>
@@ -439,6 +487,28 @@ function getWebviewContent(data: CombinedUsageData): string {
           </div>
         </div>
       </section>
+      ${recentEvents.length > 0 ? `
+      <section class="section">
+        <h2 class="section-title">Today</h2>
+        <div class="stat-row" style="border-top: none;">
+          <div class="stat-cell">
+            <span class="stat-value">${recentEvents.length}</span>
+            <span class="stat-label">requests</span>
+          </div>
+          <div class="stat-cell">
+            <span class="stat-value">${todayTokens.toLocaleString()}</span>
+            <span class="stat-label">tokens</span>
+          </div>
+          ${todayCostDisplay ? `
+          <div class="stat-cell">
+            <span class="stat-value">${todayCostDisplay}</span>
+            <span class="stat-label">cost</span>
+          </div>
+          ` : ''}
+        </div>
+      </section>
+      ` : ''}
+      ${eventsHtml}
     `;
   }
 

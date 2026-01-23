@@ -866,6 +866,12 @@ export class CursorApiService {
           const data = usageResponse.data;
           const limit = data.premiumRequestsLimit || BILLING_LIMITS[billingModel].premium;
           
+          // Also fetch recent events for activity display
+          const eventsResponse = await this.fetchUsageEvents('today');
+          const recentEvents = eventsResponse.success && eventsResponse.data 
+            ? eventsResponse.data.sort((a, b) => parseInt(b.timestamp) - parseInt(a.timestamp))
+            : [];
+          
           return {
             success: true,
             data: {
@@ -875,6 +881,7 @@ export class CursorApiService {
                 limit: limit,
                 percentage: limit > 0 ? Math.round((data.premiumRequestsUsed / limit) * 100) : 0
               },
+              recentEvents,
               periodStart: data.periodStart,
               periodEnd: data.periodEnd
             }

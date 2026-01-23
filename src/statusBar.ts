@@ -217,8 +217,23 @@ export class StatusBarManager {
       const { used, limit, percentage } = data.requestBased;
       const remaining = Math.max(0, limit - used);
       
-      md.appendMarkdown(`**${used}** / ${limit} requests used\n\n`);
-      md.appendMarkdown(`${remaining} remaining · ${percentage}%\n\n`);
+      md.appendMarkdown(`**${used}** / ${limit} requests · ${remaining} remaining\n\n`);
+      
+      // Show today's activity if available
+      const recentEvents = data.recentEvents || [];
+      if (recentEvents.length > 0) {
+        const todayTokens = recentEvents.reduce((sum, e) => sum + e.tokens, 0);
+        md.appendMarkdown(`**Today** ${recentEvents.length} requests · ${todayTokens.toLocaleString()} tokens\n\n`);
+        
+        // Show last 3 events
+        const showEvents = recentEvents.slice(0, 3);
+        for (const event of showEvents) {
+          const time = new Date(parseInt(event.timestamp)).toLocaleTimeString('en-US', { 
+            hour: 'numeric', minute: '2-digit', hour12: true 
+          });
+          md.appendMarkdown(`${time} · ${event.model} · ${event.tokens.toLocaleString()} tokens\n\n`);
+        }
+      }
     }
 
     const daysLeft = this.calculateDaysLeft(data.periodEnd);
