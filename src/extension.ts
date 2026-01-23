@@ -470,7 +470,7 @@ function getWebviewContent(data: CombinedUsageData): string {
       <section class="section">
         <h2 class="section-title">This Month</h2>
         <div class="hero-stat">
-          <span class="hero-value">${used}<span class="hero-total">/${limit}</span></span>
+          <span class="hero-value">${used}<span class="hero-total"> / ${limit}</span></span>
           <span class="hero-label">requests used</span>
         </div>
         <div class="progress-track">
