@@ -62,27 +62,23 @@ export interface ApiResponse<T> {
 }
 
 /**
- * Cursor API response structure for usage data
+ * Model usage entry from Cursor API
+ */
+export interface ModelUsageEntry {
+  numRequests: number;
+  numRequestsTotal: number;
+  maxRequestUsage: number | null;
+  numTokens: number;
+  maxTokenUsage?: number | null;
+}
+
+/**
+ * Cursor API response structure for usage data.
+ * Model keys are dynamic (e.g. "gpt-4", "gpt-3.5-turbo", "gpt-4-32k", etc.)
+ * and may vary depending on the account/plan.
  */
 export interface CursorUsageResponse {
-  'gpt-4': {
-    numRequests: number;
-    numRequestsTotal: number;
-    maxRequestUsage: number | null;
-    numTokens: number;
-  };
-  'gpt-3.5-turbo': {
-    numRequests: number;
-    numRequestsTotal: number;
-    maxRequestUsage: number | null;
-    numTokens: number;
-  };
-  'gpt-4-32k': {
-    numRequests: number;
-    numRequestsTotal: number;
-    maxRequestUsage: number | null;
-    numTokens: number;
-  };
+  [modelKey: string]: ModelUsageEntry | string;
   startOfMonth: string;
 }
 

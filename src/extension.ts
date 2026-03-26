@@ -323,16 +323,68 @@ async function showUsageDetails() {
     return;
   }
   
+  // Show webview panel
   const panel = vscode.window.createWebviewPanel(
     'cursorUsageDetails',
-    'Cursor Usage Details',
+    'Cursor Usage',
     vscode.ViewColumn.One,
-    {
-      enableScripts: false
-    }
+    {}
   );
 
   panel.webview.html = getWebviewContent(data);
+}
+
+/**
+ * Show usage details using QuickPick (fallback)
+ */
+async function showUsageQuickPick(data: CombinedUsageData) {
+  const items: vscode.QuickPickItem[] = [];
+  
+  const daysLeft = Math.max(0, Math.ceil((data.periodEnd.getTime() - Date.now()) / (1000 * 60 * 60 * 24)));
+  
+  if (data.billingType === 'usage-based' && data.usageBased) {
+    const { todayCost, todayTokens, recentEvents } = data.usageBased;
+    let costDisplay = todayCost < 0.01 ? `${(todayCost * 100).toFixed(2)}¢` : `$${todayCost.toFixed(2)}`;
+    
+    items.push(
+      { label: '$(calendar) Today', kind: vscode.QuickPickItemKind.Separator },
+      { label: `Cost: ${costDisplay}`, description: `${todayTokens.toLocaleString()} tokens · ${recentEvents.length} requests` },
+      { label: '$(history) Recent Activity', kind: vscode.QuickPickItemKind.Separator }
+    );
+    
+    for (const event of recentEvents.slice(0, 10)) {
+      const time = new Date(parseInt(event.timestamp)).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+      items.push({
+        label: `${event.model}`,
+        description: `${time} · ${event.tokens.toLocaleString()} tokens · ${event.costDisplay}`
+      });
+    }
+  } else if (data.requestBased) {
+    const { used, limit, percentage } = data.requestBased;
+    const recentEvents = data.recentEvents || [];
+    
+    items.push(
+      { label: '$(graph) This Month', kind: vscode.QuickPickItemKind.Separator },
+      { label: `Requests: ${used} / ${limit}`, description: `${percentage}% used · ${daysLeft} days left` },
+    );
+    
+    if (recentEvents.length > 0) {
+      items.push({ label: '$(history) Today\'s Activity', kind: vscode.QuickPickItemKind.Separator });
+      
+      for (const event of recentEvents.slice(0, 10)) {
+        const time = new Date(parseInt(event.timestamp)).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+        items.push({
+          label: `${event.model}`,
+          description: `${time} · ${event.tokens.toLocaleString()} tokens`
+        });
+      }
+    }
+  }
+  
+  await vscode.window.showQuickPick(items, {
+    title: 'Cursor Usage Details',
+    placeHolder: `${daysLeft} days remaining in billing period`
+  });
 }
 
 /**
@@ -517,7 +569,7 @@ function getWebviewContent(data: CombinedUsageData): string {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Usage</title>
+  <title>Cursor Usage</title>
   <style>
     * {
       margin: 0;

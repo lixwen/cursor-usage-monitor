@@ -5,7 +5,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { URL } from 'url';
 import { execSync } from 'child_process';
-import { UsageData, BillingModel, CursorUsageResponse, BILLING_LIMITS, ApiResponse, TeamsResponse, TeamSpendResponse, TeamInfo, UsageEvent, UsageEventsResponse, CombinedUsageData, StripeBillingInfo } from './types';
+import { UsageData, BillingModel, CursorUsageResponse, ModelUsageEntry, BILLING_LIMITS, ApiResponse, TeamsResponse, TeamSpendResponse, TeamInfo, UsageEvent, UsageEventsResponse, CombinedUsageData, StripeBillingInfo } from './types';
 
 // Use asm.js version of sql.js (pure JavaScript, no WASM needed)
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -477,26 +477,44 @@ export class CursorApiService {
   }
 
   /**
+   * Extract model usage entries from the dynamic-key API response
+   */
+  private extractModelEntries(response: CursorUsageResponse): Map<string, ModelUsageEntry> {
+    const entries = new Map<string, ModelUsageEntry>();
+    for (const [key, value] of Object.entries(response)) {
+      if (key === 'startOfMonth' || typeof value === 'string') {
+        continue;
+      }
+      const entry = value as ModelUsageEntry;
+      if (typeof entry.numRequests === 'number') {
+        entries.set(key, entry);
+      }
+    }
+    return entries;
+  }
+
+  /**
    * Transform API response to UsageData format
    */
   private transformUsageData(response: CursorUsageResponse, billingModel: BillingModel): UsageData {
     const limits = BILLING_LIMITS[billingModel];
-    const startOfMonth = new Date(response.startOfMonth);
+    const startOfMonth = new Date(response.startOfMonth as string);
     const endOfMonth = new Date(startOfMonth);
     endOfMonth.setMonth(endOfMonth.getMonth() + 1);
 
-    // GPT-4 requests are considered "premium"
-    const gpt4Data = response['gpt-4'];
+    const models = this.extractModelEntries(response);
+
+    // gpt-4 is the primary "premium" model key
+    const gpt4Data = models.get('gpt-4');
     const premiumUsed = gpt4Data?.numRequests || 0;
     const premiumLimit = gpt4Data?.maxRequestUsage || limits.premium;
+
+    // Sum all model requests for total
+    let totalUsed = 0;
+    for (const entry of models.values()) {
+      totalUsed += entry.numRequests || 0;
+    }
     
-    // GPT-3.5-turbo requests are standard
-    const standardUsed = response['gpt-3.5-turbo']?.numRequests || 0;
-    
-    // Total requests
-    const totalUsed = premiumUsed + standardUsed + (response['gpt-4-32k']?.numRequests || 0);
-    
-    // Check if premium requests are exhausted
     const isPremiumExhausted = premiumUsed >= premiumLimit;
 
     return {
@@ -512,28 +530,82 @@ export class CursorApiService {
   }
 
   /**
-   * Make HTTP request to Cursor API with Cookie authentication
+   * Build the cookie value from the current session token
    */
-  private makeApiRequest<T>(method: 'GET' | 'POST', endpoint: string, body?: Record<string, unknown>): Promise<ApiResponse<T>> {
+  private buildCookieValue(): string {
+    let cookieValue = this.sessionToken!;
+    if (!cookieValue.includes('::') && !cookieValue.includes('%3A%3A')) {
+      if (this.userId) {
+        cookieValue = `${this.userId}%3A%3A${cookieValue}`;
+      } else {
+        cookieValue = encodeURIComponent(cookieValue);
+      }
+    } else if (cookieValue.includes('::') && !cookieValue.includes('%3A%3A')) {
+      cookieValue = cookieValue.replace('::', '%3A%3A');
+    }
+    return cookieValue;
+  }
+
+  /**
+   * Make HTTP request to Cursor API with Cookie authentication.
+   * On 401, automatically refreshes token from SQLite and retries once.
+   */
+  private async makeApiRequest<T>(method: 'GET' | 'POST', endpoint: string, body?: Record<string, unknown>): Promise<ApiResponse<T>> {
+    const result = await this.doHttpRequest<T>(method, endpoint, body);
+
+    if (result.error?.includes('Authentication failed')) {
+      log(`Auth failed for ${endpoint}, attempting token refresh from SQLite...`);
+      const refreshed = await this.refreshTokenFromSource();
+      if (refreshed) {
+        log('Token refreshed, retrying request...');
+        return this.doHttpRequest<T>(method, endpoint, body);
+      }
+      log('Token refresh failed, returning original error');
+    }
+
+    return result;
+  }
+
+  /**
+   * Refresh token by re-reading from SQLite database
+   */
+  private async refreshTokenFromSource(): Promise<boolean> {
+    try {
+      const newToken = await this.autoDetectToken();
+      if (!newToken) {
+        return false;
+      }
+      
+      // Check if it's actually a different token
+      if (newToken === this.sessionToken) {
+        log('SQLite token is the same as current, no refresh needed');
+        return false;
+      }
+
+      const newUserId = this.extractUserId(newToken);
+      if (!newUserId) {
+        return false;
+      }
+
+      log(`Refreshed token from SQLite (old length=${this.sessionToken?.length}, new length=${newToken.length})`);
+      this.sessionToken = newToken;
+      this.userId = newUserId;
+      await this.context.secrets.store('cursorSessionToken', newToken);
+      return true;
+    } catch (error) {
+      log(`Token refresh error: ${error}`);
+      return false;
+    }
+  }
+
+  /**
+   * Execute the actual HTTP request
+   */
+  private doHttpRequest<T>(method: 'GET' | 'POST', endpoint: string, body?: Record<string, unknown>): Promise<ApiResponse<T>> {
     return new Promise((resolve) => {
       const url = `${this.API_BASE_URL}${endpoint}`;
       const parsedUrl = new URL(url);
-      
-      // Prepare cookie value - ensure it's properly formatted
-      // Cookie format should be: user_XXXXX%3A%3AJWT or user_XXXXX::JWT
-      let cookieValue = this.sessionToken!;
-      if (!cookieValue.includes('::') && !cookieValue.includes('%3A%3A')) {
-        // Pure JWT token (from SQLite), need to prepend user ID
-        if (this.userId) {
-          cookieValue = `${this.userId}%3A%3A${cookieValue}`;
-        } else {
-          cookieValue = encodeURIComponent(cookieValue);
-        }
-      } else if (cookieValue.includes('::') && !cookieValue.includes('%3A%3A')) {
-        // URL encode the :: separator
-        cookieValue = cookieValue.replace('::', '%3A%3A');
-      }
-      
+      const cookieValue = this.buildCookieValue();
       const bodyStr = body ? JSON.stringify(body) : '';
       
       const options = {
@@ -565,7 +637,8 @@ export class CursorApiService {
               const parsed = JSON.parse(data);
               resolve({ success: true, data: parsed });
             } else if (res.statusCode === 401 || res.statusCode === 403) {
-              resolve({ success: false, error: 'Authentication failed. Please check your session token.' });
+              log(`Auth failed: status=${res.statusCode}, endpoint=${endpoint}`);
+              resolve({ success: false, error: `Authentication failed (HTTP ${res.statusCode}). Please check your session token.` });
             } else {
               resolve({ success: false, error: `API returned status ${res.statusCode}: ${data}` });
             }
@@ -616,75 +689,56 @@ export class CursorApiService {
 
   /**
    * Auto-detect billing model from API
-   * - Team accounts may have request-based billing (check maxRequestUsage)
-   * - Individual accounts are now usage-based (token billing)
+   * Primary signal: maxRequestUsage from usage API (most reliable)
+   * Secondary signal: Stripe billing info for team type differentiation
    */
   public async detectBillingModel(): Promise<BillingModel> {
-    // Return cached if available
     if (this.detectedBillingModel) {
       return this.detectedBillingModel;
     }
 
     try {
-      const billingResponse = await this.fetchBillingInfo();
+      const usageResponse = await this.makeApiRequest<CursorUsageResponse>('GET', `/usage?user=${this.userId}`);
       
-      if (billingResponse.success && billingResponse.data) {
-        const info = billingResponse.data;
-        let model: BillingModel;
-
-        // Check team membership first
-        if (info.isTeamMember) {
-          // Team member - check if request-based by looking at usage API
-          const usageResponse = await this.makeApiRequest<CursorUsageResponse>('GET', `/usage?user=${this.userId}`);
-          
-          if (usageResponse.success && usageResponse.data) {
-            const gpt4Data = usageResponse.data['gpt-4'];
-            // If maxRequestUsage is set (not null), it's request-based
-            if (gpt4Data?.maxRequestUsage !== null && gpt4Data?.maxRequestUsage !== undefined) {
-              model = info.teamMembershipType === 'business' ? 'business' : 'pro';
-              log(`Team account with request limit: ${gpt4Data.maxRequestUsage}`);
-            } else {
-              // No request limit, usage-based
-              model = 'usage-based';
-            }
-          } else {
-            // Default team to business
-            model = info.teamMembershipType === 'business' ? 'business' : 'pro';
-          }
-        } else {
-          // Individual account - check membership type
-          const memberType = info.membershipType || info.individualMembershipType;
-          
-          if (memberType === 'free' || memberType === 'free_trial') {
-            // Free accounts are now usage-based
-            model = 'usage-based';
-          } else if (memberType === 'pro' || memberType === 'hobby') {
-            // Pro individual - check if has request limit
-            const usageResponse = await this.makeApiRequest<CursorUsageResponse>('GET', `/usage?user=${this.userId}`);
-            if (usageResponse.success && usageResponse.data) {
-              const gpt4Data = usageResponse.data['gpt-4'];
-              if (gpt4Data?.maxRequestUsage !== null && gpt4Data?.maxRequestUsage !== undefined) {
-                model = 'pro';
-              } else {
-                model = 'usage-based';
-              }
-            } else {
-              model = 'usage-based';
-            }
-          } else {
-            model = 'usage-based';
-          }
+      let hasRequestLimit = false;
+      let requestLimit: number | null = null;
+      
+      if (usageResponse.success && usageResponse.data) {
+        const models = this.extractModelEntries(usageResponse.data);
+        const gpt4Data = models.get('gpt-4');
+        if (gpt4Data?.maxRequestUsage !== null && gpt4Data?.maxRequestUsage !== undefined) {
+          hasRequestLimit = true;
+          requestLimit = gpt4Data.maxRequestUsage;
+          log(`Usage API reports request limit: ${requestLimit}`);
         }
-
-        this.detectedBillingModel = model;
-        log(`Auto-detected billing model: ${model} (membershipType=${info.membershipType}, isTeamMember=${info.isTeamMember}, teamType=${info.teamMembershipType})`);
-        return model;
       }
+
+      const billingResponse = await this.fetchBillingInfo();
+      const info = billingResponse.success ? billingResponse.data : null;
+
+      let model: BillingModel;
+
+      if (hasRequestLimit) {
+        if (info?.isTeamMember) {
+          const memberType = (info.membershipType || '').toLowerCase();
+          const teamType = (info.teamMembershipType || '').toLowerCase();
+          const isBusiness = memberType === 'enterprise' || memberType === 'business' ||
+                             teamType === 'business' || teamType === 'self_serve';
+          model = isBusiness ? 'business' : 'pro';
+        } else {
+          model = 'pro';
+        }
+      } else {
+        model = 'usage-based';
+      }
+
+      this.detectedBillingModel = model;
+      log(`Auto-detected billing model: ${model} (requestLimit=${requestLimit}, membershipType=${info?.membershipType}, isTeamMember=${info?.isTeamMember}, teamType=${info?.teamMembershipType})`);
+      return model;
     } catch (error) {
       log(`Failed to detect billing model: ${error}`);
     }
 
-    // Default to usage-based
     return 'usage-based';
   }
 
