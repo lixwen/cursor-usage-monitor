@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import { CursorApiService, setLogFunction } from './cursorApi';
 import { StatusBarManager } from './statusBar';
-import { ExtensionConfig, UsageData, BillingModel, DisplayMode, CombinedUsageData } from './types';
+import { ExtensionConfig, UsageData, BillingModel, DisplayMode, CombinedUsageData, UsageBasedHeadline } from './types';
 
 let statusBarManager: StatusBarManager | undefined;
 let cursorApi: CursorApiService | undefined;
@@ -95,6 +95,7 @@ async function initialize() {
 
   // Update display mode
   statusBarManager.setDisplayMode(config.displayMode);
+  statusBarManager.setUsageBasedHeadline(config.usageBasedHeadline);
 
   // Show or hide based on config
   if (!config.showInStatusBar) {
@@ -130,7 +131,8 @@ function getConfiguration(): ExtensionConfig {
     showInStatusBar: config.get<boolean>('showInStatusBar', true),
     displayMode: config.get<DisplayMode>('displayMode', 'both'),
     billingModel: config.get<BillingModel>('billingModel', 'pro'),
-    autoDetectToken: config.get<boolean>('autoDetectToken', true)
+    autoDetectToken: config.get<boolean>('autoDetectToken', true),
+    usageBasedHeadline: config.get<UsageBasedHeadline>('usageBasedHeadline', 'month')
   };
 }
 
@@ -142,6 +144,7 @@ function onConfigurationChanged() {
 
   if (statusBarManager) {
     statusBarManager.setDisplayMode(config.displayMode);
+    statusBarManager.setUsageBasedHeadline(config.usageBasedHeadline);
 
     if (!config.showInStatusBar) {
       statusBarManager.hide();
@@ -211,7 +214,7 @@ async function refreshUsageData() {
     statusBarManager.updateCombinedUsage(response.data);
     
     if (response.data.billingType === 'usage-based' && response.data.usageBased) {
-      log(`Usage data updated - usage-based: $${response.data.usageBased.todayCost.toFixed(2)} today`);
+      log(`Usage data updated - usage-based: $${response.data.usageBased.monthCost.toFixed(2)} this month ($${response.data.usageBased.todayCost.toFixed(2)} today)`);
     } else if (response.data.requestBased) {
       log(`Usage data updated - request-based: ${response.data.requestBased.used}/${response.data.requestBased.limit}`);
     }
@@ -399,19 +402,21 @@ function getWebviewContent(data: CombinedUsageData): string {
   let mainContent = '';
   
   if (data.billingType === 'usage-based' && data.usageBased) {
-    const { todayCost, todayTokens, recentEvents } = data.usageBased;
-    
-    // Format cost
-    let costDisplay: string;
-    if (todayCost === 0) {
-      costDisplay = '$0.00';
-    } else if (todayCost < 0.01) {
-      costDisplay = `${(todayCost * 100).toFixed(2)}¢`;
-    } else if (todayCost < 1) {
-      costDisplay = `$${todayCost.toFixed(3)}`;
-    } else {
-      costDisplay = `$${todayCost.toFixed(2)}`;
-    }
+    const { monthCost, monthTokens, todayCost, todayTokens, recentEvents } = data.usageBased;
+
+    const formatCostDisplay = (cost: number): string => {
+      if (cost === 0) {
+        return '$0.00';
+      } else if (cost < 0.01) {
+        return `${(cost * 100).toFixed(2)}¢`;
+      } else if (cost < 1) {
+        return `$${cost.toFixed(3)}`;
+      }
+      return `$${cost.toFixed(2)}`;
+    };
+
+    const costDisplay = formatCostDisplay(monthCost);
+    const todayCostDisplay = formatCostDisplay(todayCost);
 
     // Events list
     let eventsHtml = '';
@@ -448,19 +453,32 @@ function getWebviewContent(data: CombinedUsageData): string {
 
     mainContent = `
       <section class="section">
-        <h2 class="section-title">Today</h2>
+        <h2 class="section-title">This Month</h2>
         <div class="hero-stat">
           <span class="hero-value">${costDisplay}</span>
           <span class="hero-label">spent</span>
         </div>
         <div class="stat-row">
           <div class="stat-cell">
-            <span class="stat-value">${todayTokens.toLocaleString()}</span>
+            <span class="stat-value">${monthTokens.toLocaleString()}</span>
             <span class="stat-label">tokens</span>
           </div>
           <div class="stat-cell">
             <span class="stat-value">${recentEvents.length}</span>
             <span class="stat-label">requests</span>
+          </div>
+        </div>
+      </section>
+      <section class="section">
+        <h2 class="section-title">Today</h2>
+        <div class="stat-row" style="border-top: none;">
+          <div class="stat-cell">
+            <span class="stat-value">${todayCostDisplay}</span>
+            <span class="stat-label">spent</span>
+          </div>
+          <div class="stat-cell">
+            <span class="stat-value">${todayTokens.toLocaleString()}</span>
+            <span class="stat-label">tokens</span>
           </div>
         </div>
       </section>
