@@ -38,6 +38,12 @@ export class CursorApiService {
   private readonly API_BASE_URL = 'https://cursor.com/api';
   private context: vscode.ExtensionContext;
 
+  private monthUsageCache: {
+    monthKey: string;
+    events: UsageEvent[];
+    lastFetchEnd: number;
+  } | null = null;
+
   private constructor(context: vscode.ExtensionContext) {
     this.context = context;
   }
@@ -365,6 +371,7 @@ export class CursorApiService {
     
     this.sessionToken = token;
     this.userId = userId;
+    this.monthUsageCache = null;
     await this.context.secrets.store('cursorSessionToken', token);
     return true;
   }
@@ -672,6 +679,7 @@ export class CursorApiService {
     this.sessionToken = null;
     this.userId = null;
     this.detectedBillingModel = null;
+    this.monthUsageCache = null;
     await this.context.secrets.delete('cursorSessionToken');
     log('Credentials cleared');
   }
@@ -915,6 +923,54 @@ export class CursorApiService {
   }
 
   /**
+   * Build a stable identity key for a usage event, used to dedupe events
+   * when merging an incremental fetch into the cached month history.
+   */
+  private eventKey(e: UsageEvent): string {
+    return `${e.timestamp}|${e.model}|${e.kind}|${e.cost}`;
+  }
+
+  private async getMonthUsageEvents(startOfMonth: Date, now: Date): Promise<UsageEvent[] | null> {
+    const monthKey = `${now.getFullYear()}-${now.getMonth()}`;
+    const nowMs = now.getTime();
+
+    if (this.monthUsageCache && this.monthUsageCache.monthKey === monthKey) {
+      // Incremental: only fetch events since the last successful fetch
+      const deltaResponse = await this.fetchUsageEventsInRange(this.monthUsageCache.lastFetchEnd, nowMs);
+
+      if (deltaResponse.success && deltaResponse.data) {
+        const existingKeys = new Set(this.monthUsageCache.events.map(e => this.eventKey(e)));
+        const newEvents = deltaResponse.data.filter(e => !existingKeys.has(this.eventKey(e)));
+
+        this.monthUsageCache.events = [...this.monthUsageCache.events, ...newEvents];
+        this.monthUsageCache.lastFetchEnd = nowMs;
+
+        log(`Incremental usage fetch: +${newEvents.length} new event(s), ${this.monthUsageCache.events.length} cached total`);
+      } else {
+        log(`Incremental usage fetch failed, reusing ${this.monthUsageCache.events.length} cached event(s): ${deltaResponse.error}`);
+      }
+
+      return this.monthUsageCache.events;
+    }
+
+    // Full fetch: first run, new month, or cache was invalidated
+    const monthEventsResponse = await this.fetchUsageEventsInRange(startOfMonth.getTime(), nowMs);
+
+    if (monthEventsResponse.success && monthEventsResponse.data) {
+      this.monthUsageCache = {
+        monthKey,
+        events: monthEventsResponse.data,
+        lastFetchEnd: nowMs
+      };
+      log(`Full usage fetch: ${monthEventsResponse.data.length} event(s) cached for ${monthKey}`);
+      return this.monthUsageCache.events;
+    }
+
+    log(`Full usage fetch failed: ${monthEventsResponse.error}`);
+    return null;
+  }
+
+  /**
    * Fetch combined usage data with automatic billing type detection
    * - Team accounts with request limits: show request-based data
    * - Usage-based accounts: show cost and token data
@@ -969,10 +1025,9 @@ export class CursorApiService {
       }
 
       // For usage-based billing (free, usage-based plans)
-      const monthEventsResponse = await this.fetchUsageEventsInRange(startOfMonth.getTime(), now.getTime());
+      const monthEvents = await this.getMonthUsageEvents(startOfMonth, now);
 
-      if (monthEventsResponse.success && monthEventsResponse.data) {
-        const monthEvents = monthEventsResponse.data;
+      if (monthEvents) {
         const monthCost = monthEvents.reduce((sum, e) => sum + e.cost, 0);
         const monthTokens = monthEvents.reduce((sum, e) => sum + e.tokens, 0);
 
