@@ -326,15 +326,20 @@ async function showUsageDetails() {
     return;
   }
   
-  // Show webview panel
-  const panel = vscode.window.createWebviewPanel(
-    'cursorUsageDetails',
-    'Cursor Usage',
-    vscode.ViewColumn.One,
-    {}
-  );
+  // Show webview panel, falling back to a QuickPick if the webview fails to render
+  try {
+    const panel = vscode.window.createWebviewPanel(
+      'cursorUsageDetails',
+      'Cursor Usage',
+      vscode.ViewColumn.One,
+      {}
+    );
 
-  panel.webview.html = getWebviewContent(data);
+    panel.webview.html = getWebviewContent(data);
+  } catch (error) {
+    log(`Webview creation failed, falling back to QuickPick: ${error}`);
+    await showUsageQuickPick(data);
+  }
 }
 
 /**
@@ -347,7 +352,7 @@ async function showUsageQuickPick(data: CombinedUsageData) {
   
   if (data.billingType === 'usage-based' && data.usageBased) {
     const { todayCost, todayTokens, recentEvents } = data.usageBased;
-    let costDisplay = todayCost < 0.01 ? `${(todayCost * 100).toFixed(2)}¢` : `$${todayCost.toFixed(2)}`;
+    const costDisplay = todayCost < 0.01 ? `${(todayCost * 100).toFixed(2)}¢` : `$${todayCost.toFixed(2)}`;
     
     items.push(
       { label: '$(calendar) Today', kind: vscode.QuickPickItemKind.Separator },

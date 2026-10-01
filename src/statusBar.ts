@@ -229,7 +229,7 @@ export class StatusBarManager {
     md.isTrusted = true;
     
     if (data.requestBased) {
-      const { used, limit, percentage } = data.requestBased;
+      const { used, limit } = data.requestBased;
       const remaining = Math.max(0, limit - used);
       
       md.appendMarkdown(`**${used}** / ${limit} requests · ${remaining} remaining\n\n`);
