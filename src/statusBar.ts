@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { UsageData, DisplayMode, BillingModel, CombinedUsageData } from './types';
+import { UsageData, DisplayMode, BillingModel, CombinedUsageData, UsageBasedHeadline } from './types';
 
 /**
  * Status Bar Manager
@@ -8,6 +8,7 @@ import { UsageData, DisplayMode, BillingModel, CombinedUsageData } from './types
 export class StatusBarManager {
   private statusBarItem: vscode.StatusBarItem;
   private displayMode: DisplayMode;
+  private usageBasedHeadline: UsageBasedHeadline = 'today';
   private cachedCombinedData: CombinedUsageData | null = null;
 
   constructor() {
@@ -32,6 +33,10 @@ export class StatusBarManager {
    */
   public setDisplayMode(mode: DisplayMode): void {
     this.displayMode = mode;
+  }
+
+  public setUsageBasedHeadline(headline: UsageBasedHeadline): void {
+    this.usageBasedHeadline = headline;
   }
 
   /**
@@ -102,8 +107,9 @@ export class StatusBarManager {
     let tooltip: vscode.MarkdownString;
 
     if (data.billingType === 'usage-based' && data.usageBased) {
-      // Usage-based: show today's cost
-      const cost = data.usageBased.todayCost;
+      const cost = this.usageBasedHeadline === 'today'
+        ? data.usageBased.todayCost
+        : data.usageBased.monthCost;
       
       // Format cost - show cents if < $0.01, otherwise show dollars
       let costStr: string;
@@ -174,19 +180,28 @@ export class StatusBarManager {
     md.isTrusted = true;
 
     if (data.usageBased) {
-      const { todayCost, todayTokens, recentEvents } = data.usageBased;
-      
-      // Format cost
-      let costStr: string;
-      if (todayCost === 0) {
-        costStr = '$0.00';
-      } else if (todayCost < 0.01) {
-        costStr = `${(todayCost * 100).toFixed(2)}¢`;
+      const { monthCost, monthTokens, todayCost, todayTokens, recentEvents } = data.usageBased;
+
+      const formatCost = (cost: number): string => {
+        if (cost === 0) {
+          return '$0.00';
+        } else if (cost < 0.01) {
+          return `${(cost * 100).toFixed(2)}¢`;
+        }
+        return `$${cost.toFixed(2)}`;
+      };
+
+      const todayRequestCount = recentEvents.filter(e => parseInt(e.timestamp) >= this.startOfToday()).length;
+      const monthLine = `**This month** ${formatCost(monthCost)} · ${monthTokens.toLocaleString()} tokens\n\n`;
+      const todayLine = `**Today** ${formatCost(todayCost)} · ${todayTokens.toLocaleString()} tokens · ${todayRequestCount} requests\n\n`;
+
+      if (this.usageBasedHeadline === 'today') {
+        md.appendMarkdown(todayLine);
+        md.appendMarkdown(monthLine);
       } else {
-        costStr = `$${todayCost.toFixed(3)}`;
+        md.appendMarkdown(monthLine);
+        md.appendMarkdown(todayLine);
       }
-      
-      md.appendMarkdown(`**Today** ${costStr} · ${todayTokens.toLocaleString()} tokens · ${recentEvents.length} requests\n\n`);
       
       if (recentEvents.length > 0) {
         const showEvents = recentEvents.slice(0, 3);
@@ -214,7 +229,7 @@ export class StatusBarManager {
     md.isTrusted = true;
     
     if (data.requestBased) {
-      const { used, limit, percentage } = data.requestBased;
+      const { used, limit } = data.requestBased;
       const remaining = Math.max(0, limit - used);
       
       md.appendMarkdown(`**${used}** / ${limit} requests · ${remaining} remaining\n\n`);
@@ -410,6 +425,12 @@ export class StatusBarManager {
       day: 'numeric',
       year: 'numeric'
     });
+  }
+
+  private startOfToday(): number {
+    const d = new Date();
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
   }
 
   /**

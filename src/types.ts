@@ -46,6 +46,7 @@ export interface StripeBillingInfo {
 }
 
 export type DisplayMode = 'requests' | 'percentage' | 'both';
+export type UsageBasedHeadline = 'month' | 'today';
 
 export interface ExtensionConfig {
   refreshInterval: number;
@@ -53,6 +54,7 @@ export interface ExtensionConfig {
   displayMode: DisplayMode;
   billingModel: BillingModel;
   autoDetectToken: boolean;
+  usageBasedHeadline: UsageBasedHeadline;
 }
 
 export interface ApiResponse<T> {
@@ -159,6 +161,7 @@ export interface UsageEventsResponse {
     owningUser?: string;
     cursorTokenFee?: number;
     isChargeable?: boolean;
+    chargedCents?: number;
   }>;
 }
 
@@ -178,6 +181,8 @@ export interface CombinedUsageData {
   
   /** Usage-based data (if applicable) */
   usageBased?: {
+    monthCost: number;
+    monthTokens: number;
     todayCost: number;
     todayTokens: number;
     recentEvents: UsageEvent[];

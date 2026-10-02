@@ -38,6 +38,12 @@ export class CursorApiService {
   private readonly API_BASE_URL = 'https://cursor.com/api';
   private context: vscode.ExtensionContext;
 
+  private monthUsageCache: {
+    monthKey: string;
+    events: UsageEvent[];
+    lastFetchEnd: number;
+  } | null = null;
+
   private constructor(context: vscode.ExtensionContext) {
     this.context = context;
   }
@@ -365,6 +371,7 @@ export class CursorApiService {
     
     this.sessionToken = token;
     this.userId = userId;
+    this.monthUsageCache = null;
     await this.context.secrets.store('cursorSessionToken', token);
     return true;
   }
@@ -672,6 +679,7 @@ export class CursorApiService {
     this.sessionToken = null;
     this.userId = null;
     this.detectedBillingModel = null;
+    this.monthUsageCache = null;
     await this.context.secrets.delete('cursorSessionToken');
     log('Credentials cleared');
   }
@@ -753,6 +761,23 @@ export class CursorApiService {
    * Fetch usage events for usage-based billing
    */
   public async fetchUsageEvents(timeRange: 'today' | 'last24h' = 'today'): Promise<ApiResponse<UsageEvent[]>> {
+    const now = Date.now();
+    let startTime: number;
+
+    if (timeRange === 'today') {
+      // Start of today
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      startTime = today.getTime();
+    } else {
+      // Last 24 hours
+      startTime = now - (24 * 60 * 60 * 1000);
+    }
+
+    return this.fetchUsageEventsInRange(startTime, now);
+  }
+
+  public async fetchUsageEventsInRange(startTime: number, endTime: number): Promise<ApiResponse<UsageEvent[]>> {
     if (!this.sessionToken || !this.userId) {
       return {
         success: false,
@@ -761,46 +786,53 @@ export class CursorApiService {
     }
 
     try {
-      const now = Date.now();
-      let startTime: number;
-      
-      if (timeRange === 'today') {
-        // Start of today
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        startTime = today.getTime();
-      } else {
-        // Last 24 hours
-        startTime = now - (24 * 60 * 60 * 1000);
+      const pageSize = 100;
+      let page = 1;
+      const allEvents: UsageEvent[] = [];
+      let totalCount: number | undefined;
+
+      const MAX_PAGES = 200;
+
+      while (page <= MAX_PAGES) {
+        const response = await this.makeApiRequest<UsageEventsResponse>('POST', '/dashboard/get-filtered-usage-events', {
+          teamId: 0,
+          startDate: startTime.toString(),
+          endDate: endTime.toString(),
+          page,
+          pageSize
+        });
+
+        if (!response.success || !response.data) {
+          if (allEvents.length > 0) {
+            break;
+          }
+          return {
+            success: false,
+            error: response.error || 'Failed to fetch usage events'
+          };
+        }
+
+        if (!response.data.usageEventsDisplay || response.data.usageEventsDisplay.length === 0) {
+          break;
+        }
+
+        totalCount = response.data.totalUsageEventsCount ?? totalCount;
+        const pageEvents = this.transformUsageEvents(response.data);
+        allEvents.push(...pageEvents);
+
+        const gotFullPage = response.data.usageEventsDisplay.length >= pageSize;
+        const reachedKnownTotal = totalCount !== undefined && allEvents.length >= totalCount;
+
+        if (!gotFullPage || reachedKnownTotal) {
+          break;
+        }
+
+        page++;
       }
 
-      const response = await this.makeApiRequest<UsageEventsResponse>('POST', '/dashboard/get-filtered-usage-events', {
-        teamId: 0,
-        startDate: startTime.toString(),
-        endDate: now.toString(),
-        page: 1,
-        pageSize: 100
-      });
-
-      if (!response.success || !response.data) {
-        return {
-          success: false,
-          error: response.error || 'Failed to fetch usage events'
-        };
-      }
-
-      // Handle empty response (e.g., free plan returns {})
-      if (!response.data.usageEventsDisplay) {
-        return {
-          success: true,
-          data: []
-        };
-      }
-
-      const events = this.transformUsageEvents(response.data);
       return {
         success: true,
-        data: events
+        data: allEvents
       };
     } catch (error) {
       return {
@@ -827,17 +859,18 @@ export class CursorApiService {
                      (event.tokenUsage?.inputTokens || 0) +
                      (event.tokenUsage?.outputTokens || 0);
 
-      // Get cost - prefer totalCents from tokenUsage, fallback to usageBasedCosts
       let costCents = 0;
       let costDisplay = '$0.00';
-      
-      if (event.tokenUsage?.totalCents !== undefined) {
-        // New format: totalCents in tokenUsage
-        costCents = event.tokenUsage.totalCents;
+
+      if (event.chargedCents !== undefined) {
+        costCents = event.chargedCents;
+        const costDollars = costCents / 100;
+        costDisplay = `$${costDollars.toFixed(4)}`;
+      } else if (event.tokenUsage?.totalCents !== undefined) {
+        costCents = event.tokenUsage.totalCents + (event.cursorTokenFee || 0);
         const costDollars = costCents / 100;
         costDisplay = `$${costDollars.toFixed(4)}`;
       } else if (event.usageBasedCosts && event.usageBasedCosts !== '-') {
-        // Old format: usageBasedCosts
         const costInfo = this.parseCost(event.usageBasedCosts);
         costCents = costInfo.numericValue * 100;
         costDisplay = costInfo.displayValue;
@@ -887,6 +920,54 @@ export class CursorApiService {
     }
 
     return { numericValue: 0, displayValue: '$0.00' };
+  }
+
+  /**
+   * Build a stable identity key for a usage event, used to dedupe events
+   * when merging an incremental fetch into the cached month history.
+   */
+  private eventKey(e: UsageEvent): string {
+    return `${e.timestamp}|${e.model}|${e.kind}|${e.cost}`;
+  }
+
+  private async getMonthUsageEvents(startOfMonth: Date, now: Date): Promise<UsageEvent[] | null> {
+    const monthKey = `${now.getFullYear()}-${now.getMonth()}`;
+    const nowMs = now.getTime();
+
+    if (this.monthUsageCache && this.monthUsageCache.monthKey === monthKey) {
+      // Incremental: only fetch events since the last successful fetch
+      const deltaResponse = await this.fetchUsageEventsInRange(this.monthUsageCache.lastFetchEnd, nowMs);
+
+      if (deltaResponse.success && deltaResponse.data) {
+        const existingKeys = new Set(this.monthUsageCache.events.map(e => this.eventKey(e)));
+        const newEvents = deltaResponse.data.filter(e => !existingKeys.has(this.eventKey(e)));
+
+        this.monthUsageCache.events = [...this.monthUsageCache.events, ...newEvents];
+        this.monthUsageCache.lastFetchEnd = nowMs;
+
+        log(`Incremental usage fetch: +${newEvents.length} new event(s), ${this.monthUsageCache.events.length} cached total`);
+      } else {
+        log(`Incremental usage fetch failed, reusing ${this.monthUsageCache.events.length} cached event(s): ${deltaResponse.error}`);
+      }
+
+      return this.monthUsageCache.events;
+    }
+
+    // Full fetch: first run, new month, or cache was invalidated
+    const monthEventsResponse = await this.fetchUsageEventsInRange(startOfMonth.getTime(), nowMs);
+
+    if (monthEventsResponse.success && monthEventsResponse.data) {
+      this.monthUsageCache = {
+        monthKey,
+        events: monthEventsResponse.data,
+        lastFetchEnd: nowMs
+      };
+      log(`Full usage fetch: ${monthEventsResponse.data.length} event(s) cached for ${monthKey}`);
+      return this.monthUsageCache.events;
+    }
+
+    log(`Full usage fetch failed: ${monthEventsResponse.error}`);
+    return null;
   }
 
   /**
@@ -944,21 +1025,32 @@ export class CursorApiService {
       }
 
       // For usage-based billing (free, usage-based plans)
-      const eventsResponse = await this.fetchUsageEvents('today');
-      
-      if (eventsResponse.success && eventsResponse.data) {
-        const events = eventsResponse.data;
-        const todayCost = events.reduce((sum, e) => sum + e.cost, 0);
-        const todayTokens = events.reduce((sum, e) => sum + e.tokens, 0);
+      const monthEvents = await this.getMonthUsageEvents(startOfMonth, now);
+
+      if (monthEvents) {
+        const monthCost = monthEvents.reduce((sum, e) => sum + e.cost, 0);
+        const monthTokens = monthEvents.reduce((sum, e) => sum + e.tokens, 0);
+
+        // Derive "today" subset from the same data set (no extra request needed)
+        const todayStart = new Date();
+        todayStart.setHours(0, 0, 0, 0);
+        const todayStartMs = todayStart.getTime();
+        const todayEvents = monthEvents.filter(e => parseInt(e.timestamp) >= todayStartMs);
+        const todayCost = todayEvents.reduce((sum, e) => sum + e.cost, 0);
+        const todayTokens = todayEvents.reduce((sum, e) => sum + e.tokens, 0);
+
+        const sortedEvents = [...monthEvents].sort((a, b) => parseInt(b.timestamp) - parseInt(a.timestamp));
 
         return {
           success: true,
           data: {
             billingType: 'usage-based',
             usageBased: {
+              monthCost,
+              monthTokens,
               todayCost,
               todayTokens,
-              recentEvents: events.sort((a, b) => parseInt(b.timestamp) - parseInt(a.timestamp))
+              recentEvents: sortedEvents
             },
             periodStart: startOfMonth,
             periodEnd: endOfMonth
@@ -972,6 +1064,8 @@ export class CursorApiService {
         data: {
           billingType: 'usage-based',
           usageBased: {
+            monthCost: 0,
+            monthTokens: 0,
             todayCost: 0,
             todayTokens: 0,
             recentEvents: []

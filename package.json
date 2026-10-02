@@ -85,6 +85,19 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically detect token from Cursor's local database"
+        },
+        "cursorUsage.usageBasedHeadline": {
+          "type": "string",
+          "enum": [
+            "month",
+            "today"
+          ],
+          "enumDescriptions": [
+            "Show this month's total cost as the headline figure",
+            "Show today's cost as the headline figure"
+          ],
+          "default": "today",
+          "description": "Which figure to show as the headline in the status bar for usage-based billing"
         }
       }
     }
